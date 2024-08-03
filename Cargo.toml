@@ -1,0 +1,10 @@
+[package]
+name = "subseq_scheduling"
+version = "0.1.0"
+edition = "2021"
+authors = ["Teague Lasser"]
+
+[dependencies]
+anyhow = "1.0.79"
+rand = "0.8.5"
+uuid = "1.8.0"
