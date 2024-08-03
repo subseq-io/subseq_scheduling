@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::bounds::{Bound, Constraints, Window};
+use crate::bounds::{Bound, Constraints, Violation, Window};
 use crate::event::Event;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -14,6 +14,7 @@ pub struct EventMarker {
     worker_id: WorkerId,
     event: Event,
     interrupting: Option<usize>,
+    violations: Vec<Violation>,
     cost: f64,
 }
 
@@ -23,16 +24,16 @@ pub const EVENT_VIOLATION_COST: f64 = 100.0;
 pub const INTERRUPT_COST: f64 = 10.0;
 
 impl EventMarker {
-    pub fn calc_cost(event: &Event, interrupting: bool) -> f64 {
+    pub fn calc_cost(event: &Event, interrupting: bool) -> (f64, Vec<Violation>) {
         let mut cost = 0.0;
         cost += event.start() * START_COST_ADJUSTMENT;
         cost += event.adjusted_duration() * DURATION_COST_ADJUSTMENT;
         cost += if interrupting { INTERRUPT_COST } else { 0.0 };
         let violations = event.constraints_met();
-        for _ in violations {
+        for _ in &violations {
             cost += EVENT_VIOLATION_COST;
         }
-        cost
+        (cost, violations)
     }
 
     pub fn cost(&self) -> f64 {
@@ -43,12 +44,21 @@ impl EventMarker {
         self.worker_id
     }
 
+    pub fn windows(&self) -> Vec<Window> {
+        self.event.windows()
+    }
+
+    pub fn violations(&self) -> Vec<Violation> {
+        self.violations.clone()
+    }
+
     pub fn new(worker_id: WorkerId, event: Event, interrupting: Option<usize>) -> Self {
-        let cost = Self::calc_cost(&event, interrupting.is_some());
+        let (cost, violations) = Self::calc_cost(&event, interrupting.is_some());
         Self {
             worker_id,
             event,
             interrupting,
+            violations,
             cost,
         }
     }
@@ -121,6 +131,13 @@ impl Worker {
                 break;
             }
 
+            if let Some(parent_id) = event.parent_id() {
+                if parent_id == job.event.id() {
+                    // Children are technically the same job as their parent, so they can be
+                    // scheduled at the same time.
+                    continue;
+                }
+            }
             considerations.push(job.event.total_window());
         }
 

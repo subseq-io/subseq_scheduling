@@ -5,7 +5,7 @@ use rand::SeedableRng;
 use rand::{rngs::StdRng, seq::SliceRandom};
 use uuid::Uuid;
 
-use crate::bounds::{Constraints, Violation, Window};
+use crate::bounds::{Bound, Constraints, Violation, Window};
 use crate::prelude::PlanBlueprint;
 use crate::worker::{Capability, EventMarker, Worker, WorkerId};
 
@@ -154,14 +154,23 @@ impl Event {
         }
     }
 
+    pub fn id(&self) -> EventId {
+        self.id
+    }
+
+    pub fn parent_id(&self) -> Option<EventId> {
+        self.parent
+    }
+
     pub fn start(&self) -> f64 {
         self.segments.first().map_or(0.0, |segment| segment.start)
     }
 
     pub fn set_start(&mut self, start: f64) {
-        self.segments
-            .first_mut()
-            .map(|segment| segment.start = start);
+        let offset = start - self.start();
+        for seg in self.segments.iter_mut() {
+            seg.start += offset;
+        }
     }
 
     pub fn duration(&self) -> f64 {
@@ -172,6 +181,10 @@ impl Event {
 
     pub fn priority(&self) -> i64 {
         self.priority
+    }
+
+    pub fn dependencies(&self) -> Vec<EventId> {
+        self.dependencies.iter().map(|dep| dep.0).collect()
     }
 
     pub fn adjusted_duration(&self) -> f64 {
@@ -194,6 +207,12 @@ impl Event {
 
     pub fn constraints_met(&self) -> Vec<Violation> {
         self.constraints.hard_bound_fn()(self.total_window())
+    }
+
+    pub fn from_windows(&mut self, windows: Vec<Window>) {
+        self.segments = windows.into_iter()
+            .map(|window| EventSegment{start: window.start, duration: window.end - window.start})
+            .collect();
     }
 
     pub fn windows(&self) -> Vec<Window> {
@@ -279,7 +298,24 @@ impl PlanningPhase {
             };
 
             let mut work_plans = vec![];
-            let event = &self.events[next_event.event_id.0];
+            let mut event = (&self.events[next_event.event_id.0]).clone();
+
+            let mut start_time = event.start();
+            for dep in event.dependencies() {
+                let dep_event = &self.events[dep.0];
+                let end = dep_event.total_window().end;
+                start_time = start_time.max(end);
+            }
+            if let Some(parent) = event.parent {
+                let parent_event = &self.events[parent.0];
+                let parent_range = parent_event.total_window();
+                start_time = start_time.max(parent_range.start);
+
+                // The child event should not be scheduled for longer than the parent event.
+                event.constraints = event.constraints.add_hard_bound(Bound::Upper(parent_range.end));
+            }
+            event.set_start(start_time);
+
             for worker_id in worker_ids.iter().cloned() {
                 let worker = &self.workers[worker_id.0];
                 if worker.can_do(&event.requirements) {
@@ -305,7 +341,19 @@ impl PlanningPhase {
             }
 
             if let Some(lowest_cost) = lowest_cost {
+                let event = self.events.get_mut(next_event.event_id.0).unwrap();
+                event.assigned_worker = Some(lowest_cost.worker_id());
+                event.from_windows(lowest_cost.windows());
                 let worker = self.workers.get_mut(lowest_cost.worker_id().0).unwrap();
+                let vio = lowest_cost.violations();
+                if !vio.is_empty() {
+                    self.problems.push(
+                        Problem {
+                            event_id: self.event_map[&next_event.event_id],
+                            problem: format!("Worker is scheduled with event plan that violates constraints: {:?}", vio)
+                        }
+                    );
+                }
                 worker.add_job(lowest_cost);
             } else {
                 self.problems.push(Problem {

@@ -3,6 +3,7 @@ use std::{
     collections::VecDeque,
 };
 
+#[derive(Debug, Clone, Copy)]
 pub enum Violation {
     /// The value must be equal to or above the given bound.
     Lower(f64),
