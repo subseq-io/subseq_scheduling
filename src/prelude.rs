@@ -3,10 +3,12 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, Result as AnyResult};
 use uuid::Uuid;
 
+pub use crate::bounds::Attention;
 use crate::bounds::{Constraints, Window};
 use crate::event::{Connection, Event, EventId, PlanningPhase};
 pub use crate::event::{Plan, PlannedEvent, Problem};
-use crate::worker::{Capability, WorkerId, Worker};
+pub use crate::worker::WorkerUtilization;
+use crate::worker::{Capability, Worker, WorkerId};
 
 pub struct ConnectionBlueprint(Uuid);
 
@@ -15,6 +17,8 @@ pub struct EventBlueprint {
     pub id: Uuid,
     pub start: Option<f64>,
     pub duration: f64,
+    /// Out of 100
+    pub attention: Attention,
     /// Lower is higher priority
     pub priority: i64,
     pub assigned_worker: Option<WorkerId>,
@@ -30,6 +34,7 @@ impl EventBlueprint {
             id,
             start: None,
             duration,
+            attention: Attention::default(),
             priority,
             assigned_worker: None,
             requirements: HashSet::new(),
@@ -41,6 +46,11 @@ impl EventBlueprint {
 
     pub fn start(mut self, start: f64) -> Self {
         self.start = Some(start);
+        self
+    }
+
+    pub fn attention(mut self, attention: Attention) -> Self {
+        self.attention = attention;
         self
     }
 
@@ -64,9 +74,23 @@ impl EventBlueprint {
         self
     }
 
-    pub fn child(mut self, child: EventBlueprint) -> Self {
+    pub fn child(mut self, child: EventBlueprint) -> AnyResult<Self> {
+        if self.duration < child.duration {
+            return Err(anyhow!("Child duration is longer than parent"));
+        }
+        if let Some(start) = self.start {
+            if let Some(child_start) = child.start {
+                if child_start < start {
+                    return Err(anyhow!("Child starts before parent"));
+                }
+            }
+        }
+        // If the child has a higher priority, the parent should have the same priority
+        if self.priority > child.priority {
+            self.priority = child.priority;
+        }
         self.children.push(child);
-        self
+        Ok(self)
     }
 }
 
@@ -108,7 +132,10 @@ impl PlanBlueprint {
             };
 
             if let Some(start) = plan.start {
-                if !worker.is_available_for(Window{start, end: start + plan.duration}) {
+                if !worker.is_available_for(Window {
+                    start,
+                    end: start + plan.duration,
+                }) {
                     return Err(anyhow!(
                         "{:?} is not available at the given start time",
                         assigned_worker
@@ -133,6 +160,7 @@ impl PlanBlueprint {
             plan.start.unwrap_or(0.0),
             plan.duration,
             plan.priority,
+            plan.attention,
             plan.assigned_worker,
             plan.requirements,
             plan.constraints,
@@ -145,13 +173,14 @@ impl PlanBlueprint {
         Ok(self)
     }
 
-    pub fn worker(mut self, worker_id: Uuid, blocked_off: Constraints, capabilities: HashSet<Capability>) -> Self {
+    pub fn worker(
+        mut self,
+        worker_id: Uuid,
+        blocked_off: Constraints,
+        capabilities: HashSet<Capability>,
+    ) -> Self {
         let id = WorkerId(self.workers.len());
-        let worker = Worker::new(
-            id,
-            blocked_off,
-            capabilities,
-        );
+        let worker = Worker::new(id, blocked_off, capabilities);
         self.worker_map.insert(id, worker_id);
         self.workers.push(worker);
         self

@@ -1,7 +1,50 @@
 use std::{
     cmp::{Ordering, PartialEq},
     collections::VecDeque,
+    ops::Add,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
+pub struct Attention(u8);
+
+pub const MAX_ATTENTION: u8 = 100;
+pub const DEFAULT_ATTENTION: u8 = 75;
+pub const PARTIAL_ATTENTION: u8 = 50;
+pub const MIN_ATTENTION: u8 = 25;
+pub const NO_ATTENTION: u8 = 0;
+
+impl Attention {
+    pub fn new(attention: u8) -> Self {
+        Attention(attention.min(MAX_ATTENTION))
+    }
+
+    pub fn value(&self) -> u8 {
+        self.0
+    }
+
+    pub const NO_MULTITASKING: Self = Attention(MAX_ATTENTION);
+    pub const DEFAULT_MULTITASKING: Self = Attention(DEFAULT_ATTENTION);
+    pub const PARTIAL_MULTITASKING: Self = Attention(PARTIAL_ATTENTION);
+    pub const FULL_MULTITASKING: Self = Attention(MIN_ATTENTION);
+    pub const TRACKING: Self = Attention(NO_ATTENTION);
+
+    pub fn can_multitask_with(&self, other: &Self) -> bool {
+        self.0.saturating_add(other.0) <= 100
+    }
+}
+
+impl Add for Attention {
+    type Output = Self;
+    fn add(self, other: Self) -> Self::Output {
+        Attention::new(self.0 + other.0)
+    }
+}
+
+impl Default for Attention {
+    fn default() -> Self {
+        Attention::DEFAULT_MULTITASKING
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Violation {
@@ -52,6 +95,10 @@ impl Window {
             start: self.start + offset,
             end: self.end + offset,
         }
+    }
+
+    pub fn duration(&self) -> f64 {
+        self.end - self.start
     }
 }
 
@@ -201,20 +248,50 @@ impl Default for Constraints {
     }
 }
 
+#[derive(Debug)]
 struct RepeatedBoundState {
     offset: isize,
     bound: RepeatedBound,
     last_range: Window,
 }
 
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+pub struct Consideration {
+    pub window: Window,
+    pub attention: Attention,
+}
+
+impl Consideration {
+    pub fn new(window: Window, attention: Attention) -> Self {
+        Self { window, attention }
+    }
+}
+
+impl Eq for Consideration {}
+
+impl From<Window> for Consideration {
+    fn from(window: Window) -> Self {
+        Consideration {
+            window,
+            attention: Attention::NO_MULTITASKING,
+        }
+    }
+}
+
+impl Ord for Consideration {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.window.cmp(&other.window)
+    }
+}
+
 struct BlockIterator {
     repeated_blocks: Vec<RepeatedBoundState>,
     time: f64,
-    next_blocks: VecDeque<Window>,
+    next_blocks: VecDeque<Consideration>,
 }
 
 impl BlockIterator {
-    pub fn new(constraints: &[Constraint], time: f64, considerations: Vec<Window>) -> Self {
+    pub fn new(constraints: &[Constraint], time: f64, considerations: Vec<Consideration>) -> Self {
         let mut blocks = vec![];
         let mut repeated_blocks = vec![];
         for block in considerations {
@@ -223,10 +300,10 @@ impl BlockIterator {
 
         for block in constraints {
             match block {
-                Constraint::Block(range) => blocks.push(*range),
+                Constraint::Block(range) => blocks.push((*range).into()),
                 Constraint::RepeatedBlock(repeated_bound) => {
                     let next_range = repeated_bound.range(-1, time);
-                    blocks.push(next_range);
+                    blocks.push(next_range.into());
 
                     repeated_blocks.push(RepeatedBoundState {
                         offset: 0,
@@ -247,7 +324,7 @@ impl BlockIterator {
     }
 
     fn next_repeated_blocks(&mut self) {
-        let mut next_blocks = vec![];
+        let mut next_blocks: Vec<Consideration> = vec![];
         let first_block = self
             .repeated_blocks
             .first()
@@ -260,9 +337,10 @@ impl BlockIterator {
                     continue;
                 }
             }
-            let next_range = block.bound.range(block.offset, self.time);
+            let next_range = block.last_range.add_offset(block.bound.n as f64);
             block.offset += 1;
-            next_blocks.push(next_range);
+            block.last_range = next_range;
+            next_blocks.push(next_range.into());
         }
         self.next_blocks.extend(next_blocks);
         self.next_blocks.make_contiguous().sort();
@@ -270,12 +348,12 @@ impl BlockIterator {
 }
 
 impl Iterator for BlockIterator {
-    type Item = Window;
+    type Item = Consideration;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_repeated_blocks();
         if let Some(next_block) = self.next_blocks.pop_front() {
-            self.time = next_block.end;
+            self.time = next_block.window.end;
             Some(next_block)
         } else {
             None
@@ -355,8 +433,8 @@ impl Constraints {
     pub fn block_iter(
         &self,
         start: f64,
-        considerations: Vec<Window>,
-    ) -> impl Iterator<Item = Window> {
+        considerations: Vec<Consideration>,
+    ) -> impl Iterator<Item = Consideration> {
         BlockIterator::new(&self.0, start, considerations)
     }
 
@@ -391,6 +469,40 @@ impl Constraints {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_attention_add() {
+        let attention = Attention::new(50);
+        let attention2 = Attention::new(25);
+        let attention3 = Attention::new(75);
+        assert_eq!(attention + attention2, attention3);
+    }
+
+    #[test]
+    fn test_attention_max() {
+        let attention = Attention::new(100);
+        let attention2 = Attention::new(50);
+        assert_eq!(attention + attention2, attention);
+    }
+
+    #[test]
+    fn test_attention_can_multitask() {
+        let attention = Attention::new(50);
+        let attention2 = Attention::new(25);
+        assert!(attention.can_multitask_with(&attention2));
+
+        let attention = Attention::new(75);
+        let attention2 = Attention::new(25);
+        assert!(attention.can_multitask_with(&attention2));
+
+        let attention = Attention::new(75);
+        let attention2 = Attention::new(50);
+        assert!(!attention.can_multitask_with(&attention2));
+
+        let attention = Attention::new(75);
+        let attention2 = Attention::new(100);
+        assert!(!attention.can_multitask_with(&attention2));
+    }
 
     #[test]
     fn test_overlap_case1() {
@@ -572,7 +684,8 @@ mod tests {
         let considerations = vec![Window {
             start: 5.0,
             end: 10.0,
-        }];
+        }
+        .into()];
         let constraints = vec![Constraint::Block(Window {
             start: 0.0,
             end: 5.0,
@@ -581,17 +694,23 @@ mod tests {
 
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 0.0,
-                end: 5.0
-            })
+            Some(
+                Window {
+                    start: 0.0,
+                    end: 5.0
+                }
+                .into()
+            )
         );
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 5.0,
-                end: 10.0
-            })
+            Some(
+                Window {
+                    start: 5.0,
+                    end: 10.0
+                }
+                .into()
+            )
         );
         assert_eq!(bi.next(), None);
     }
@@ -602,11 +721,13 @@ mod tests {
             Window {
                 start: 8.0,
                 end: 15.0,
-            },
+            }
+            .into(),
             Window {
                 start: 18.0,
                 end: 32.0,
-            },
+            }
+            .into(),
         ];
         let constraints = vec![
             Constraint::RepeatedBlock(RepeatedBound {
@@ -625,52 +746,73 @@ mod tests {
 
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: -1.0,
-                end: 1.0
-            })
+            Some(
+                Window {
+                    start: -1.0,
+                    end: 1.0
+                }
+                .into()
+            )
         );
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 0.0,
-                end: 5.0
-            })
+            Some(
+                Window {
+                    start: 0.0,
+                    end: 5.0
+                }
+                .into()
+            )
         );
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 6.0,
-                end: 8.0
-            })
+            Some(
+                Window {
+                    start: 6.0,
+                    end: 8.0
+                }
+                .into()
+            )
         );
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 8.0,
-                end: 15.0
-            })
+            Some(
+                Window {
+                    start: 8.0,
+                    end: 15.0
+                }
+                .into()
+            )
         );
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 13.0,
-                end: 15.0
-            })
+            Some(
+                Window {
+                    start: 13.0,
+                    end: 15.0
+                }
+                .into()
+            )
         );
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 18.0,
-                end: 32.0
-            })
+            Some(
+                Window {
+                    start: 18.0,
+                    end: 32.0
+                }
+                .into()
+            )
         );
         assert_eq!(
             bi.next(),
-            Some(Window {
-                start: 20.0,
-                end: 22.0
-            })
+            Some(
+                Window {
+                    start: 20.0,
+                    end: 22.0
+                }
+                .into()
+            )
         );
     }
 }

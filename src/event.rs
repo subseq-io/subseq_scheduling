@@ -5,9 +5,9 @@ use rand::SeedableRng;
 use rand::{rngs::StdRng, seq::SliceRandom};
 use uuid::Uuid;
 
-use crate::bounds::{Bound, Constraints, Violation, Window};
+use crate::bounds::{Attention, Bound, Constraints, Violation, Window};
 use crate::prelude::PlanBlueprint;
-use crate::worker::{Capability, EventMarker, Worker, WorkerId};
+use crate::worker::{Capability, EventMarker, Worker, WorkerId, WorkerUtilization};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub struct EventId(pub(crate) usize);
@@ -15,7 +15,7 @@ pub struct EventId(pub(crate) usize);
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub struct Connection(pub EventId);
 
-#[derive(PartialEq, PartialOrd, Clone, Copy)]
+#[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
 struct EventQueueEntry {
     event_id: EventId,
     start: f64,
@@ -42,6 +42,7 @@ impl Ord for EventQueueEntry {
     }
 }
 
+#[derive(Debug)]
 struct EventQueue {
     queue: BinaryHeap<EventQueueEntry>,
 }
@@ -119,6 +120,7 @@ impl EventSegment {
 pub struct Event {
     id: EventId,
     priority: i64,
+    attention: Attention,
     assigned_worker: Option<WorkerId>,
     requirements: HashSet<Capability>,
     constraints: Constraints,
@@ -134,6 +136,7 @@ impl Event {
         start: f64,
         duration: f64,
         priority: i64,
+        attention: Attention,
         assigned_worker: Option<WorkerId>,
         requirements: HashSet<Capability>,
         constraints: Constraints,
@@ -144,6 +147,7 @@ impl Event {
         Event {
             id,
             priority,
+            attention,
             assigned_worker,
             requirements,
             constraints,
@@ -160,6 +164,10 @@ impl Event {
 
     pub fn parent_id(&self) -> Option<EventId> {
         self.parent
+    }
+
+    pub fn attention(&self) -> Attention {
+        self.attention
     }
 
     pub fn start(&self) -> f64 {
@@ -187,6 +195,19 @@ impl Event {
         self.dependencies.iter().map(|dep| dep.0).collect()
     }
 
+    pub fn depends_on(&self, event: EventId, events: &[Event]) -> bool {
+        for dep in &self.dependencies {
+            if dep.0 == event {
+                return true;
+            }
+            let dep_event = &events[dep.0 .0];
+            if dep_event.depends_on(event, events) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn adjusted_duration(&self) -> f64 {
         self.segments
             .last()
@@ -210,8 +231,12 @@ impl Event {
     }
 
     pub fn from_windows(&mut self, windows: Vec<Window>) {
-        self.segments = windows.into_iter()
-            .map(|window| EventSegment{start: window.start, duration: window.end - window.start})
+        self.segments = windows
+            .into_iter()
+            .map(|window| EventSegment {
+                start: window.start,
+                duration: window.duration(),
+            })
             .collect();
     }
 
@@ -223,7 +248,7 @@ impl Event {
     }
 
     /// Creates two child events from this event, splitting the duration.
-    pub fn split_segment(&mut self, segment: isize, point: f64, duration: f64) {
+    pub fn split_segment(&mut self, segment: isize, point: f64, duration: f64) -> bool {
         assert!(duration > 0.0);
 
         let segment: usize = if segment < 0 {
@@ -240,21 +265,26 @@ impl Event {
         if new_duration > 0.0 {
             // But nothing needs to happen if the duration is zero.
             if new_segment_duration <= 0.0 {
-                return;
+                return false;
             }
             let new_segment = EventSegment {
                 start: point + duration,
                 duration: new_segment_duration,
             };
+            // TODO: Check for segment overlap and join later segments if this is in the middle of
+            // the segment list
             segment.duration = new_duration;
             self.segments.push(new_segment);
+            true
         } else {
             // Otherise the segment just needs to be shifted forward past the point + duration.
             segment.start = point + duration;
+            false
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Problem {
     pub event_id: Uuid,
     pub problem: String,
@@ -273,10 +303,11 @@ pub struct PlanningPhase {
 
 impl From<PlanBlueprint> for PlanningPhase {
     fn from(blueprint: PlanBlueprint) -> Self {
-        let queue = EventQueue::from_events(&blueprint.events);
+        let events = blueprint.events;
+        let queue = EventQueue::from_events(&events);
 
         PlanningPhase {
-            events: blueprint.events,
+            events,
             event_map: blueprint.event_map,
             event_queue: queue,
             rand: StdRng::from_seed(blueprint.seed),
@@ -288,6 +319,32 @@ impl From<PlanBlueprint> for PlanningPhase {
 }
 
 impl PlanningPhase {
+    #[cfg(test)]
+    pub(crate) fn new(events: Vec<Event>, workers: Vec<Worker>, seed: [u8; 32]) -> Self {
+        let queue = EventQueue::from_events(&events);
+        let event_map = HashMap::from_iter(
+            events
+                .iter()
+                .map(|event| (event.id, Uuid::from_u128(u128::from(event.id.0 as u64)))),
+        );
+        let worker_map = HashMap::from_iter(workers.iter().map(|worker| {
+            (
+                worker.id(),
+                Uuid::from_u128(u128::from(worker.id().0 as u64)),
+            )
+        }));
+
+        PlanningPhase {
+            events,
+            event_map,
+            event_queue: queue,
+            rand: StdRng::from_seed(seed),
+            problems: Vec::new(),
+            workers,
+            worker_map,
+        }
+    }
+
     fn create_plan(&mut self) {
         let worker_ids: Vec<_> = self.workers.iter().map(|worker| worker.id()).collect();
 
@@ -296,7 +353,6 @@ impl PlanningPhase {
                 Some(queued_event) => queued_event,
                 None => break,
             };
-
             let mut work_plans = vec![];
             let mut event = (&self.events[next_event.event_id.0]).clone();
 
@@ -312,15 +368,17 @@ impl PlanningPhase {
                 start_time = start_time.max(parent_range.start);
 
                 // The child event should not be scheduled for longer than the parent event.
-                event.constraints = event.constraints.add_hard_bound(Bound::Upper(parent_range.end));
+                event.constraints = event
+                    .constraints
+                    .add_hard_bound(Bound::Upper(parent_range.end));
             }
             event.set_start(start_time);
 
-            for worker_id in worker_ids.iter().cloned() {
+            for worker_id in worker_ids.iter() {
                 let worker = &self.workers[worker_id.0];
                 if worker.can_do(&event.requirements) {
                     // We clone the event so the worker can mutate it into a plan
-                    let work_plan = worker.expected_job_duration(event.clone());
+                    let work_plan = worker.expected_job_duration(event.clone(), &self.events);
                     if let Some(work_plan) = work_plan {
                         work_plans.push(work_plan);
                     }
@@ -328,7 +386,6 @@ impl PlanningPhase {
             }
             // Randomize the order of the work plans to prevent bias.
             work_plans.shuffle(&mut self.rand);
-
             let mut lowest_cost: Option<EventMarker> = None;
             for work_plan in work_plans {
                 if let Some(plan) = &lowest_cost {
@@ -347,12 +404,13 @@ impl PlanningPhase {
                 let worker = self.workers.get_mut(lowest_cost.worker_id().0).unwrap();
                 let vio = lowest_cost.violations();
                 if !vio.is_empty() {
-                    self.problems.push(
-                        Problem {
-                            event_id: self.event_map[&next_event.event_id],
-                            problem: format!("Worker is scheduled with event plan that violates constraints: {:?}", vio)
-                        }
-                    );
+                    self.problems.push(Problem {
+                        event_id: self.event_map[&next_event.event_id],
+                        problem: format!(
+                            "Worker is scheduled with event plan that violates constraints: {:?}",
+                            vio
+                        ),
+                    });
                 }
                 worker.add_job(lowest_cost);
             } else {
@@ -368,19 +426,34 @@ impl PlanningPhase {
         self.create_plan();
 
         let mut planned_events = Vec::new();
+        let mut utilization = Vec::new();
         for worker in &self.workers {
+            let worker_id = self.worker_map[&worker.id()];
             for job in worker.jobs() {
                 planned_events.push(PlannedEvent {
                     id: self.event_map[&job.id],
                     segments: job.segments,
-                    worker_id: self.worker_map[&worker.id()],
+                    worker_id,
                 });
             }
+            utilization.push(WorkerUtilization {
+                worker_id,
+                utilization_rate: worker.utilization_rate(),
+            });
         }
         if self.problems.is_empty() {
-            Ok(Plan(planned_events))
+            Ok(Plan {
+                events: planned_events,
+                utilization,
+            })
         } else {
-            Err((Plan(planned_events), self.problems))
+            Err((
+                Plan {
+                    events: planned_events,
+                    utilization,
+                },
+                self.problems,
+            ))
         }
     }
 }
@@ -392,10 +465,16 @@ pub struct PlannedEvent {
     pub segments: Vec<EventSegment>,
 }
 
-pub struct Plan(pub Vec<PlannedEvent>);
+#[derive(Debug)]
+pub struct Plan {
+    pub events: Vec<PlannedEvent>,
+    pub utilization: Vec<WorkerUtilization>,
+}
 
 #[cfg(test)]
 mod tests {
+    use crate::bounds::{Attention, RepeatedBound};
+
     use super::*;
 
     #[test]
@@ -405,6 +484,7 @@ mod tests {
             0.0,
             10.0,
             0,
+            Attention::NO_MULTITASKING,
             None,
             HashSet::new(),
             Constraints::default(),
@@ -441,6 +521,7 @@ mod tests {
             0.0,
             10.0,
             0,
+            Attention::NO_MULTITASKING,
             None,
             HashSet::new(),
             Constraints::default(),
@@ -469,6 +550,7 @@ mod tests {
             0.0,
             15.0,
             0,
+            Attention::NO_MULTITASKING,
             None,
             HashSet::new(),
             Constraints::default(),
@@ -498,5 +580,188 @@ mod tests {
             ]
         );
         assert_eq!(event.adjusted_duration(), 19.0);
+    }
+
+    #[test]
+    fn test_planning_phase() {
+        let capabilites0 = HashSet::from_iter(vec![0].into_iter().map(|x| Capability(x)));
+        let capabilites1 = HashSet::from_iter(vec![1].into_iter().map(|x| Capability(x)));
+        let capabilites01 = HashSet::from_iter(vec![0, 1].into_iter().map(|x| Capability(x)));
+
+        let event0 = Event::new(
+            EventId(0),
+            0.0,
+            10.0,
+            0,
+            Attention::default(),
+            None,
+            capabilites0.clone(),
+            Constraints::default(),
+            Vec::new(),
+            None,
+        );
+
+        let event1 = Event::new(
+            EventId(1),
+            0.0,
+            10.0,
+            2,
+            Attention::default(),
+            None,
+            capabilites0.clone(),
+            Constraints::default(),
+            Vec::new(),
+            None,
+        );
+
+        let event2 = Event::new(
+            EventId(2),
+            0.0,
+            10.0,
+            -1,
+            Attention::default(),
+            None,
+            capabilites1.clone(),
+            Constraints::default(),
+            Vec::new(),
+            None,
+        );
+
+        let worker0 = Worker::new(
+            WorkerId(0),
+            Constraints::default().add_repeated_block(RepeatedBound::new(
+                7,
+                Window {
+                    start: 6.0,
+                    end: 8.0,
+                },
+            )),
+            capabilites0,
+        );
+        let worker1 = Worker::new(
+            WorkerId(1),
+            Constraints::default().add_repeated_block(RepeatedBound::new(
+                7,
+                Window {
+                    start: 6.0,
+                    end: 8.0,
+                },
+            )),
+            capabilites01,
+        );
+
+        let phase = PlanningPhase::new(
+            vec![event0, event1, event2],
+            vec![worker0, worker1],
+            [0; 32],
+        );
+        let plan = phase.plan().unwrap();
+
+        for event in &plan.events {
+            eprintln!("{:?}", event);
+        }
+        for worker in &plan.utilization {
+            eprintln!("{:?}", worker);
+        }
+        assert_eq!(plan.events.len(), 3);
+        for worker in plan.utilization {
+            assert_eq!(worker.utilization_rate, 1.0);
+        }
+    }
+
+    #[test]
+    fn test_planning_dependencies() {
+        let capabilites0 = HashSet::from_iter(vec![0].into_iter().map(|x| Capability(x)));
+        let capabilites1 = HashSet::from_iter(vec![1].into_iter().map(|x| Capability(x)));
+        let capabilites01 = HashSet::from_iter(vec![0, 1].into_iter().map(|x| Capability(x)));
+
+        let event0 = Event::new(
+            EventId(0),
+            0.0,
+            10.0,
+            0,
+            Attention::DEFAULT_MULTITASKING,
+            None,
+            capabilites0.clone(),
+            Constraints::default(),
+            Vec::new(),
+            None,
+        );
+
+        let event1 = Event::new(
+            EventId(1),
+            0.0,
+            10.0,
+            2,
+            Attention::default(),
+            None,
+            capabilites0.clone(),
+            Constraints::default(),
+            vec![Connection(EventId(0))],
+            None,
+        );
+
+        let event2 = Event::new(
+            EventId(2),
+            0.0,
+            10.0,
+            -1,
+            Attention::default(),
+            None,
+            capabilites1.clone(),
+            Constraints::default(),
+            vec![Connection(EventId(1))],
+            None,
+        );
+
+        let event3 = Event::new(
+            EventId(3),
+            0.0,
+            10.0,
+            -1,
+            Attention::default(),
+            None,
+            capabilites1.clone(),
+            Constraints::default(),
+            Vec::new(),
+            None,
+        );
+        let events = vec![event0, event1, event2, event3];
+
+        let worker0 = Worker::new(
+            WorkerId(0),
+            Constraints::default().add_repeated_block(RepeatedBound::new(
+                7,
+                Window {
+                    start: 6.0,
+                    end: 8.0,
+                },
+            )),
+            capabilites0,
+        );
+        let worker1 = Worker::new(
+            WorkerId(1),
+            Constraints::default().add_repeated_block(RepeatedBound::new(
+                7,
+                Window {
+                    start: 6.0,
+                    end: 8.0,
+                },
+            )),
+            capabilites01,
+        );
+
+        let phase = PlanningPhase::new(events, vec![worker0, worker1], [0; 32]);
+        let plan = phase.plan().unwrap();
+        for event in &plan.events {
+            eprintln!("{:?}", event);
+        }
+        for worker in &plan.utilization {
+            eprintln!("{:?}", worker);
+        }
+        assert_eq!(plan.events.len(), 4);
+        for worker in plan.utilization {
+            assert_eq!(worker.utilization_rate, 1.0);
+        }
     }
 }
