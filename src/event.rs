@@ -3,6 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use rand::SeedableRng;
 use rand::{rngs::StdRng, seq::SliceRandom};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::bounds::{Attention, Bound, Constraints, Violation, Window};
@@ -97,7 +98,7 @@ impl EventQueue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventSegment {
     start: f64,
     duration: f64,
@@ -284,7 +285,7 @@ impl Event {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Problem {
     pub event_id: Uuid,
     pub problem: String,
@@ -458,14 +459,14 @@ impl PlanningPhase {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannedEvent {
     pub id: Uuid,
     pub worker_id: Uuid,
     pub segments: Vec<EventSegment>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Plan {
     pub events: Vec<PlannedEvent>,
     pub utilization: Vec<WorkerUtilization>,

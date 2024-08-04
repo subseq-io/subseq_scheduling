@@ -1,18 +1,20 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result as AnyResult};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use crate::bounds::Attention;
-use crate::bounds::{Constraints, Window};
+pub use crate::bounds::{Attention, Bound, Constraints, Window};
 use crate::event::{Connection, Event, EventId, PlanningPhase};
 pub use crate::event::{Plan, PlannedEvent, Problem};
-pub use crate::worker::WorkerUtilization;
-use crate::worker::{Capability, Worker, WorkerId};
+pub use crate::worker::{Capability, WorkerUtilization};
+use crate::worker::{Worker, WorkerId};
 
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectionBlueprint(Uuid);
 
 /// A blueprint for events that need to be planned.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EventBlueprint {
     pub id: Uuid,
     pub start: Option<f64>,
@@ -21,7 +23,7 @@ pub struct EventBlueprint {
     pub attention: Attention,
     /// Lower is higher priority
     pub priority: i64,
-    pub assigned_worker: Option<WorkerId>,
+    pub assigned_worker: Option<Uuid>,
     pub requirements: HashSet<Capability>,
     pub constraints: Constraints,
     pub dependencies: Vec<ConnectionBlueprint>,
@@ -54,7 +56,7 @@ impl EventBlueprint {
         self
     }
 
-    pub fn assigned_worker(mut self, assigned_worker: WorkerId) -> Self {
+    pub fn assigned_worker(mut self, assigned_worker: Uuid) -> Self {
         self.assigned_worker = Some(assigned_worker);
         self
     }
@@ -123,13 +125,20 @@ impl PlanBlueprint {
     pub fn event(mut self, plan: EventBlueprint) -> AnyResult<Self> {
         let id = EventId(self.events.len());
 
-        if let Some(assigned_worker) = &plan.assigned_worker {
-            let worker = match self.workers.get_mut(assigned_worker.0) {
-                Some(worker) => worker,
+        let assigned_worker = if let Some(assigned_worker) = &plan.assigned_worker {
+            let mut worker_id = None;
+            for (&worker_index, worker_uuid) in self.worker_map.iter() {
+                if worker_uuid == assigned_worker {
+                    worker_id = Some(worker_index);
+                }
+            }
+            let worker_id = match worker_id {
+                Some(worker_id) => worker_id,
                 None => {
-                    return Err(anyhow!("{:?} not found", assigned_worker));
+                    return Err(anyhow!("Worker {:?} not found", assigned_worker));
                 }
             };
+            let worker = self.workers.get_mut(worker_id.0).unwrap();
 
             if let Some(start) = plan.start {
                 if !worker.is_available_for(Window {
@@ -142,7 +151,10 @@ impl PlanBlueprint {
                     ));
                 }
             }
-        }
+            Some(worker_id)
+        } else {
+            None
+        };
 
         let mut dependencies = vec![];
         for connection in plan.dependencies {
@@ -161,7 +173,7 @@ impl PlanBlueprint {
             plan.duration,
             plan.priority,
             plan.attention,
-            plan.assigned_worker,
+            assigned_worker,
             plan.requirements,
             plan.constraints,
             dependencies,

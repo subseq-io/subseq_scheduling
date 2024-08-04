@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::bounds::{Bound, Consideration, Constraints, Violation, Window, DEFAULT_ATTENTION};
 use crate::event::Event;
 use crate::prelude::Attention;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Capability(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -294,7 +295,7 @@ impl Worker {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WorkerUtilization {
     pub worker_id: Uuid,
     pub utilization_rate: f64,

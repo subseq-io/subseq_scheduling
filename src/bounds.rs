@@ -1,10 +1,11 @@
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::{Ordering, PartialEq},
     collections::VecDeque,
     ops::Add,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash, Serialize, Deserialize)]
 pub struct Attention(u8);
 
 pub const MAX_ATTENTION: u8 = 100;
@@ -46,7 +47,7 @@ impl Default for Attention {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum Violation {
     /// The value must be equal to or above the given bound.
     Lower(f64),
@@ -54,7 +55,7 @@ pub enum Violation {
     Upper(f64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Window {
     pub start: f64, // Inclusive
     pub end: f64,   // Exclusive
@@ -102,7 +103,7 @@ impl Window {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Bound {
     /// The range must start after the given value.
     Lower(f64),
@@ -144,7 +145,7 @@ impl Bound {
 
 /// Repeated bound, block off this range ever nth repeat.
 /// This is used for representing repeated constraints such as weekends.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RepeatedBound {
     n: usize,
     bound: Window,
@@ -175,10 +176,10 @@ impl RepeatedBound {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct HardConstraint(Bound);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Constraint {
     /// A hard constraint is a constraint that must be satisfied for the solution
     HardConstraint(HardConstraint),
@@ -239,7 +240,7 @@ impl PartialOrd for Constraint {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Constraints(Vec<Constraint>);
 
 impl Default for Constraints {
