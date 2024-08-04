@@ -680,7 +680,7 @@ mod tests {
             0.0,
             10.0,
             0,
-            Attention::DEFAULT_MULTITASKING,
+            Attention::default(),
             None,
             capabilites0.clone(),
             Constraints::default(),
