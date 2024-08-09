@@ -241,6 +241,11 @@ impl Worker {
                 return None;
             }
         }
+
+        eprintln!(
+            "EventMarker: {:?}, {:?}, {:?}, {}",
+            self.id, event, interrupted_work, total_attention
+        );
         Some(EventMarker::new(
             self.id,
             event,
@@ -296,6 +301,7 @@ impl Worker {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerUtilization {
     pub worker_id: Uuid,
     pub utilization_rate: f64,

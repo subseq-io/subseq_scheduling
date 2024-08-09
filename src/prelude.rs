@@ -4,9 +4,9 @@ use anyhow::{anyhow, Result as AnyResult};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use crate::bounds::{Attention, Bound, Constraint, Constraints, Window};
+pub use crate::bounds::{Attention, Bound, Constraint, Constraints, RepeatedBound, Window};
 use crate::event::{Connection, Event, EventId, PlanningPhase};
-pub use crate::event::{Plan, PlannedEvent, Problem};
+pub use crate::event::{EventSegment, Plan, PlannedEvent, Problem};
 pub use crate::worker::{Capability, WorkerUtilization};
 use crate::worker::{Worker, WorkerId};
 
@@ -15,6 +15,7 @@ pub struct ConnectionBlueprint(Uuid);
 
 /// A blueprint for events that need to be planned.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EventBlueprint {
     pub id: Uuid,
     pub start: Option<f64>,
@@ -44,6 +45,10 @@ impl EventBlueprint {
             dependencies: Vec::new(),
             children: Vec::new(),
         }
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.id
     }
 
     pub fn start(mut self, start: f64) -> Self {

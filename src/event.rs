@@ -16,12 +16,12 @@ pub struct EventId(pub(crate) usize);
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub struct Connection(pub EventId);
 
-#[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
-struct EventQueueEntry {
-    event_id: EventId,
-    start: f64,
-    priority: i64,
-    depth: usize,
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub struct EventQueueEntry {
+    pub event_id: EventId,
+    pub start: f64,
+    pub priority: i64,
+    pub depth: isize,
 }
 
 impl Eq for EventQueueEntry {}
@@ -30,31 +30,44 @@ impl Eq for EventQueueEntry {}
 impl Ord for EventQueueEntry {
     // Lower priority events come first.
     fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .priority
-            .cmp(&self.priority)
-            .then_with(|| other.depth.cmp(&self.depth))
-            .then_with(|| {
-                other
-                    .start
-                    .partial_cmp(&self.start)
-                    .unwrap_or(Ordering::Equal)
-            })
+        match other.priority.cmp(&self.priority) {
+            Ordering::Equal => {
+                // Higher depth events come first.
+                match self.depth.cmp(&other.depth) {
+                    Ordering::Equal => {
+                        // Earlier start times come first.
+                        match self.start.partial_cmp(&other.start) {
+                            Some(Ordering::Equal) => self.event_id.cmp(&other.event_id),
+                            Some(x) => x,
+                            None => Ordering::Equal,
+                        }
+                    }
+                    x => x,
+                }
+            }
+            x => x,
+        }
+    }
+}
+
+impl PartialOrd for EventQueueEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
 #[derive(Debug)]
-struct EventQueue {
-    queue: BinaryHeap<EventQueueEntry>,
+pub struct EventQueue {
+    pub queue: BinaryHeap<EventQueueEntry>,
 }
 
 impl EventQueue {
     fn push_queue_entry(
-        queue: &mut BinaryHeap<EventQueueEntry>,
+        &mut self,
         event: &Event,
         events: &[Event],
         seen: &mut HashSet<EventId>,
-        depth: usize,
+        depth: isize,
         parent_priority: Option<i64>,
     ) {
         if seen.contains(&event.id) {
@@ -67,9 +80,10 @@ impl EventQueue {
         };
         for connection in &event.dependencies {
             let dependency = &events[connection.0 .0];
-            Self::push_queue_entry(queue, dependency, events, seen, depth + 1, Some(priority));
+            eprintln!("{:?} Dependency: {:?}", event.id, dependency);
+            self.push_queue_entry(dependency, events, seen, depth + 1, Some(priority));
         }
-        queue.push(EventQueueEntry {
+        self.push(EventQueueEntry {
             event_id: event.id,
             start: event.start(),
             priority,
@@ -79,8 +93,12 @@ impl EventQueue {
 
         for child in &event.children {
             let child_event = &events[child.0];
-            Self::push_queue_entry(queue, child_event, events, seen, depth + 1, Some(priority));
+            self.push_queue_entry(child_event, events, seen, depth - 1, Some(priority));
         }
+    }
+
+    pub fn push(&mut self, entry: EventQueueEntry) {
+        self.queue.push(entry);
     }
 
     pub fn pop(&mut self) -> Option<EventQueueEntry> {
@@ -88,20 +106,24 @@ impl EventQueue {
     }
 
     pub fn from_events(events: &[Event]) -> Self {
-        let mut queue = BinaryHeap::new();
+        let queue = BinaryHeap::new();
+        let mut this = Self { queue };
         let mut seen = HashSet::new();
 
-        for event in events.iter() {
-            Self::push_queue_entry(&mut queue, event, events, &mut seen, 0, None);
+        let mut queue_order = events.iter().collect::<Vec<_>>();
+        queue_order.sort_by_key(|event| event.priority());
+        for event in queue_order {
+            this.push_queue_entry(event, events, &mut seen, 0, None);
         }
-        EventQueue { queue }
+        this
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EventSegment {
-    start: f64,
-    duration: f64,
+    pub start: f64,
+    pub duration: f64,
 }
 
 impl EventSegment {
@@ -192,8 +214,14 @@ impl Event {
         self.priority
     }
 
-    pub fn dependencies(&self) -> Vec<EventId> {
-        self.dependencies.iter().map(|dep| dep.0).collect()
+    pub fn dependencies(&self, events: &[Event]) -> Vec<EventId> {
+        let mut deps = Vec::new();
+        for dep in &self.dependencies {
+            deps.push(dep.0);
+            let dep_event = &events[dep.0 .0];
+            deps.extend(dep_event.dependencies(events));
+        }
+        deps
     }
 
     pub fn depends_on(&self, event: EventId, events: &[Event]) -> bool {
@@ -286,6 +314,7 @@ impl Event {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Problem {
     pub event_id: Uuid,
     pub problem: String,
@@ -354,11 +383,12 @@ impl PlanningPhase {
                 Some(queued_event) => queued_event,
                 None => break,
             };
+            eprintln!("\nEvent: {:?}", next_event);
             let mut work_plans = vec![];
             let mut event = (&self.events[next_event.event_id.0]).clone();
 
             let mut start_time = event.start();
-            for dep in event.dependencies() {
+            for dep in event.dependencies(&self.events) {
                 let dep_event = &self.events[dep.0];
                 let end = dep_event.total_window().end;
                 start_time = start_time.max(end);
@@ -373,6 +403,8 @@ impl PlanningPhase {
                     .constraints
                     .add_hard_bound(Bound::Upper(parent_range.end));
             }
+            eprintln!("Start time: {}", start_time);
+            event.constraints = event.constraints.add_hard_bound(Bound::Lower(start_time));
             event.set_start(start_time);
 
             for worker_id in worker_ids.iter() {
@@ -460,13 +492,27 @@ impl PlanningPhase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlannedEvent {
     pub id: Uuid,
     pub worker_id: Uuid,
     pub segments: Vec<EventSegment>,
 }
 
+impl PlannedEvent {
+    pub fn start(&self) -> f64 {
+        self.segments.first().map_or(0.0, |segment| segment.start)
+    }
+
+    pub fn end(&self) -> f64 {
+        self.segments
+            .last()
+            .map_or(0.0, |segment| segment.start + segment.duration)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Plan {
     pub events: Vec<PlannedEvent>,
     pub utilization: Vec<WorkerUtilization>,
@@ -477,6 +523,46 @@ mod tests {
     use crate::bounds::{Attention, RepeatedBound};
 
     use super::*;
+
+    #[test]
+    fn test_queue() {
+        let mut queue = EventQueue {
+            queue: BinaryHeap::new(),
+        };
+        queue.push(EventQueueEntry {
+            event_id: EventId(0),
+            start: 0.0,
+            priority: 0,
+            depth: 0,
+        });
+        queue.push(EventQueueEntry {
+            event_id: EventId(1),
+            start: 1.0,
+            priority: 1,
+            depth: 0,
+        });
+        queue.push(EventQueueEntry {
+            event_id: EventId(2),
+            start: 2.0,
+            priority: -1,
+            depth: 0,
+        });
+        queue.push(EventQueueEntry {
+            event_id: EventId(3),
+            start: 3.0,
+            priority: 1,
+            depth: 1,
+        });
+
+        let entry = queue.pop().unwrap();
+        assert_eq!(entry.event_id, EventId(2));
+        let entry = queue.pop().unwrap();
+        assert_eq!(entry.event_id, EventId(0));
+        let entry = queue.pop().unwrap();
+        assert_eq!(entry.event_id, EventId(3));
+        let entry = queue.pop().unwrap();
+        assert_eq!(entry.event_id, EventId(1));
+    }
 
     #[test]
     fn test_event_durations() {
@@ -679,7 +765,7 @@ mod tests {
         let event0 = Event::new(
             EventId(0),
             0.0,
-            10.0,
+            2.0,
             0,
             Attention::default(),
             None,
@@ -692,7 +778,7 @@ mod tests {
         let event1 = Event::new(
             EventId(1),
             0.0,
-            10.0,
+            2.0,
             2,
             Attention::default(),
             None,
@@ -705,7 +791,7 @@ mod tests {
         let event2 = Event::new(
             EventId(2),
             0.0,
-            10.0,
+            2.0,
             -1,
             Attention::default(),
             None,
@@ -718,8 +804,8 @@ mod tests {
         let event3 = Event::new(
             EventId(3),
             0.0,
-            10.0,
-            -1,
+            2.0,
+            2,
             Attention::default(),
             None,
             capabilites1.clone(),
@@ -754,15 +840,47 @@ mod tests {
 
         let phase = PlanningPhase::new(events, vec![worker0, worker1], [0; 32]);
         let plan = phase.plan().unwrap();
+
+        let zero = Uuid::from_u128(0);
+        let one = Uuid::from_u128(1);
+        let two = Uuid::from_u128(2);
+        let three = Uuid::from_u128(3);
+
         for event in &plan.events {
             eprintln!("{:?}", event);
+        }
+
+        for event in &plan.events {
+            match event.id {
+                x if x == zero => {
+                    assert_eq!(event.start(), 1.0);
+                    assert_eq!(event.end(), 3.0);
+                }
+                x if x == one => {
+                    assert_eq!(event.start(), 3.0);
+                    assert_eq!(event.end(), 5.0);
+                }
+                x if x == two => {
+                    assert_eq!(event.start(), 5.0);
+                    assert_eq!(event.end(), 9.0);
+                }
+                x if x == three => {
+                    assert_eq!(event.start(), 3.0);
+                    assert_eq!(event.end(), 5.0);
+                }
+                _ => panic!("Unexpected event id"),
+            }
         }
         for worker in &plan.utilization {
             eprintln!("{:?}", worker);
         }
         assert_eq!(plan.events.len(), 4);
         for worker in plan.utilization {
-            assert_eq!(worker.utilization_rate, 1.0);
+            match worker.worker_id {
+                x if x == zero => assert_eq!(worker.utilization_rate, 0.5),
+                x if x == one => assert_eq!(worker.utilization_rate, 1.0),
+                _ => panic!("Unexpected worker id"),
+            }
         }
     }
 }

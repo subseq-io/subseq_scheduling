@@ -48,6 +48,7 @@ impl Default for Attention {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub enum Violation {
     /// The value must be equal to or above the given bound.
     Lower(f64),
@@ -56,6 +57,7 @@ pub enum Violation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Window {
     pub start: f64, // Inclusive
     pub end: f64,   // Exclusive
@@ -79,6 +81,10 @@ impl Ord for Window {
 }
 
 impl Window {
+    pub fn new(start: f64, end: f64) -> Self {
+        Window { start, end }
+    }
+
     pub fn overlap(&self, other: Window) -> bool {
         // Case 1: The range is entirely within the outer range.
         let case1 = other.start >= self.start && other.end <= self.end;
@@ -104,6 +110,7 @@ impl Window {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Bound {
     /// The range must start after the given value.
     Lower(f64),
@@ -146,6 +153,7 @@ impl Bound {
 /// Repeated bound, block off this range ever nth repeat.
 /// This is used for representing repeated constraints such as weekends.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepeatedBound {
     n: usize,
     bound: Window,
@@ -177,9 +185,11 @@ impl RepeatedBound {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HardConstraint(Bound);
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Constraint {
     /// A hard constraint is a constraint that must be satisfied for the solution
     HardConstraint(HardConstraint),
@@ -241,6 +251,7 @@ impl PartialOrd for Constraint {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Constraints(Vec<Constraint>);
 
 impl Default for Constraints {
