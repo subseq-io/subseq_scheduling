@@ -36,7 +36,7 @@ impl Ord for EventQueueEntry {
                 match self.depth.cmp(&other.depth) {
                     Ordering::Equal => {
                         // Earlier start times come first.
-                        match self.start.partial_cmp(&other.start) {
+                        match other.start.partial_cmp(&self.start) {
                             Some(Ordering::Equal) => self.event_id.cmp(&other.event_id),
                             Some(x) => x,
                             None => Ordering::Equal,
@@ -58,6 +58,7 @@ impl PartialOrd for EventQueueEntry {
 
 #[derive(Debug)]
 pub struct EventQueue {
+    pub staging: HashMap<EventId, EventQueueEntry>,
     pub queue: BinaryHeap<EventQueueEntry>,
 }
 
@@ -66,13 +67,9 @@ impl EventQueue {
         &mut self,
         event: &Event,
         events: &[Event],
-        seen: &mut HashSet<EventId>,
         depth: isize,
         parent_priority: Option<i64>,
     ) {
-        if seen.contains(&event.id) {
-            return;
-        }
         let priority = if let Some(parent_priority) = parent_priority {
             event.priority.min(parent_priority)
         } else {
@@ -81,19 +78,28 @@ impl EventQueue {
         for connection in &event.dependencies {
             let dependency = &events[connection.0 .0];
             eprintln!("{:?} Dependency: {:?}", event.id, dependency);
-            self.push_queue_entry(dependency, events, seen, depth + 1, Some(priority));
+            self.push_queue_entry(dependency, events, depth + 1, Some(priority));
         }
-        self.push(EventQueueEntry {
+        self.stage(EventQueueEntry {
             event_id: event.id,
             start: event.start(),
             priority,
             depth,
         });
-        seen.insert(event.id);
 
         for child in &event.children {
             let child_event = &events[child.0];
-            self.push_queue_entry(child_event, events, seen, depth - 1, Some(priority));
+            self.push_queue_entry(child_event, events, depth - 1, Some(priority));
+        }
+    }
+
+    pub fn stage(&mut self, entry: EventQueueEntry) {
+        let stage_entry = self.staging.entry(entry.event_id).or_insert(entry);
+        if entry.priority < stage_entry.priority {
+            stage_entry.priority = entry.priority;
+        }
+        if entry.depth > stage_entry.depth {
+            stage_entry.depth = entry.depth;
         }
     }
 
@@ -106,14 +112,22 @@ impl EventQueue {
     }
 
     pub fn from_events(events: &[Event]) -> Self {
-        let queue = BinaryHeap::new();
-        let mut this = Self { queue };
-        let mut seen = HashSet::new();
-
+        let mut this = Self {
+            staging: HashMap::new(),
+            queue: BinaryHeap::new(),
+        };
         let mut queue_order = events.iter().collect::<Vec<_>>();
         queue_order.sort_by_key(|event| event.priority());
         for event in queue_order {
-            this.push_queue_entry(event, events, &mut seen, 0, None);
+            this.push_queue_entry(event, events, 0, None);
+        }
+        let staged = this
+            .staging
+            .drain()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>();
+        for entry in staged {
+            this.push(entry);
         }
         this
     }
@@ -527,6 +541,7 @@ mod tests {
     #[test]
     fn test_queue() {
         let mut queue = EventQueue {
+            staging: HashMap::new(),
             queue: BinaryHeap::new(),
         };
         queue.push(EventQueueEntry {
