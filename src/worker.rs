@@ -241,11 +241,6 @@ impl Worker {
                 return None;
             }
         }
-
-        eprintln!(
-            "EventMarker: {:?}, {:?}, {:?}, {}",
-            self.id, event, interrupted_work, total_attention
-        );
         Some(EventMarker::new(
             self.id,
             event,

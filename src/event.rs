@@ -77,7 +77,6 @@ impl EventQueue {
         };
         for connection in &event.dependencies {
             let dependency = &events[connection.0 .0];
-            eprintln!("{:?} Dependency: {:?}", event.id, dependency);
             self.push_queue_entry(dependency, events, depth + 1, Some(priority));
         }
         self.stage(EventQueueEntry {
@@ -397,7 +396,6 @@ impl PlanningPhase {
                 Some(queued_event) => queued_event,
                 None => break,
             };
-            eprintln!("\nEvent: {:?}", next_event);
             let mut work_plans = vec![];
             let mut event = (&self.events[next_event.event_id.0]).clone();
 
@@ -417,7 +415,6 @@ impl PlanningPhase {
                     .constraints
                     .add_hard_bound(Bound::Upper(parent_range.end));
             }
-            eprintln!("Start time: {}", start_time);
             event.constraints = event.constraints.add_hard_bound(Bound::Lower(start_time));
             event.set_start(start_time);
 
@@ -568,6 +565,12 @@ mod tests {
             priority: 1,
             depth: 1,
         });
+        queue.push(EventQueueEntry {
+            event_id: EventId(4),
+            start: -1.0,
+            priority: 1,
+            depth: 0,
+        });
 
         let entry = queue.pop().unwrap();
         assert_eq!(entry.event_id, EventId(2));
@@ -575,6 +578,8 @@ mod tests {
         assert_eq!(entry.event_id, EventId(0));
         let entry = queue.pop().unwrap();
         assert_eq!(entry.event_id, EventId(3));
+        let entry = queue.pop().unwrap();
+        assert_eq!(entry.event_id, EventId(4));
         let entry = queue.pop().unwrap();
         assert_eq!(entry.event_id, EventId(1));
     }
