@@ -296,7 +296,7 @@ impl Ord for Consideration {
     }
 }
 
-struct BlockIterator {
+pub struct BlockIterator {
     repeated_blocks: Vec<RepeatedBoundState>,
     time: f64,
     next_blocks: VecDeque<Consideration>,

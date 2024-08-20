@@ -4,7 +4,9 @@ use anyhow::{anyhow, Result as AnyResult};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use crate::bounds::{Attention, Bound, Constraint, Constraints, RepeatedBound, Window};
+pub use crate::bounds::{
+    Attention, Bound, BlockIterator, Consideration, Constraint, Constraints, RepeatedBound, Window,
+};
 use crate::event::{Connection, Event, EventId, PlanningPhase};
 pub use crate::event::{EventSegment, Plan, PlannedEvent, Problem};
 pub use crate::worker::{Capability, WorkerUtilization};
