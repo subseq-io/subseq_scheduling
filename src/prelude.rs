@@ -8,7 +8,7 @@ pub use crate::bounds::{
     Attention, Bound, BlockIterator, Consideration, Constraint, Constraints, RepeatedBound, Window,
 };
 use crate::event::{Connection, Event, EventId, PlanningPhase};
-pub use crate::event::{EventSegment, Plan, PlannedEvent, Problem};
+pub use crate::event::{EventSegment, Plan, PlannedEvent, Problem, split_segment};
 pub use crate::worker::{Capability, WorkerUtilization};
 use crate::worker::{Worker, WorkerId};
 

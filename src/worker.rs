@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::bounds::{Bound, Consideration, Constraints, Violation, Window, DEFAULT_ATTENTION};
-use crate::event::Event;
+use crate::event::{split_segment, Event};
 use crate::prelude::Attention;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -207,7 +207,8 @@ impl Worker {
                         .can_multitask_with(&current_attention)
                     {
                         attention_windows.remove(&window);
-                        if event.split_segment(
+                        if split_segment(
+                            &mut event.segments,
                             i as isize,
                             consideration.window.start,
                             consideration.window.duration(),

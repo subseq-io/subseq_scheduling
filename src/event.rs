@@ -163,7 +163,7 @@ pub struct Event {
     dependencies: Vec<Connection>,
     parent: Option<EventId>,
     children: Vec<EventId>,
-    segments: Vec<EventSegment>,
+    pub(crate) segments: Vec<EventSegment>,
 }
 
 impl Event {
@@ -258,7 +258,7 @@ impl Event {
     }
 
     pub fn interrupt(&mut self, event: &Event) {
-        self.split_segment(-1, event.start(), event.duration());
+        split_segment(&mut self.segments, -1, event.start(), event.duration());
     }
 
     pub fn total_window(&self) -> Window {
@@ -289,42 +289,43 @@ impl Event {
             .collect()
     }
 
-    /// Creates two child events from this event, splitting the duration.
-    pub fn split_segment(&mut self, segment: isize, point: f64, duration: f64) -> bool {
-        assert!(duration > 0.0);
+}
 
-        let segment: usize = if segment < 0 {
-            self.segments.len().saturating_sub(segment.abs() as usize)
-        } else {
-            segment as usize
-        };
-        let segment = self.segments.get_mut(segment).unwrap();
+/// Creates two child events from this event, splitting the duration.
+pub fn split_segment(segments: &mut Vec<EventSegment>, segment: isize, point: f64, duration: f64) -> bool {
+    assert!(duration > 0.0);
+    let segment: usize = if segment < 0 {
+        segments.len().saturating_sub(segment.abs() as usize)
+    } else {
+        segment as usize
+    };
+    let segment = segments.get_mut(segment).unwrap();
 
-        let new_duration = point - segment.start;
-        let new_segment_duration = segment.duration - new_duration;
+    let new_duration = point - segment.start;
+    let new_segment_duration = segment.duration - new_duration;
 
-        // Point is after the start of the segment.
-        if new_duration > 0.0 {
-            // But nothing needs to happen if the duration is zero.
-            if new_segment_duration <= 0.0 {
-                return false;
-            }
-            let new_segment = EventSegment {
-                start: point + duration,
-                duration: new_segment_duration,
-            };
-            // TODO: Check for segment overlap and join later segments if this is in the middle of
-            // the segment list
-            segment.duration = new_duration;
-            self.segments.push(new_segment);
-            true
-        } else {
-            // Otherise the segment just needs to be shifted forward past the point + duration.
-            segment.start = point + duration;
-            false
+    // Point is after the start of the segment.
+    if new_duration > 0.0 {
+        // But nothing needs to happen if the duration is zero.
+        if new_segment_duration <= 0.0 {
+            return false;
         }
+        let new_segment = EventSegment {
+            start: point + duration,
+            duration: new_segment_duration,
+        };
+        // TODO: Check for segment overlap and join later segments if this is in the middle of
+        // the segment list
+        segment.duration = new_duration;
+        segments.push(new_segment);
+        true
+    } else {
+        // Otherise the segment just needs to be shifted forward past the point + duration.
+        segment.start = point + duration;
+        false
     }
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -602,7 +603,7 @@ mod tests {
         assert_eq!(event.start(), 0.0);
         assert_eq!(event.duration(), 10.0);
 
-        event.split_segment(0, 5.0, 5.0);
+        split_segment(&mut event.segments, 0, 5.0, 5.0);
         assert_eq!(event.start(), 0.0);
         assert_eq!(event.duration(), 10.0);
         assert_eq!(event.adjusted_duration(), 15.0);
@@ -635,7 +636,7 @@ mod tests {
             Vec::new(),
             None,
         );
-        event.split_segment(0, -1.0, 2.0);
+        split_segment(&mut event.segments, 0, -1.0, 2.0);
 
         // The split happens before the start of the event.
         // The event should be shifted forward by 1.0.
@@ -664,9 +665,9 @@ mod tests {
             Vec::new(),
             None,
         );
-        event.split_segment(-1, -1.0, 2.0);
-        event.split_segment(-1, 6.0, 2.0);
-        event.split_segment(-1, 13.0, 2.0);
+        split_segment(&mut event.segments, -1, -1.0, 2.0);
+        split_segment(&mut event.segments, -1, 6.0, 2.0);
+        split_segment(&mut event.segments, -1, 13.0, 2.0);
 
         assert_eq!(event.start(), 1.0);
         assert_eq!(
