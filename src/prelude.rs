@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use crate::bounds::{
-    Attention, Bound, BlockIterator, Consideration, Constraint, Constraints, RepeatedBound, Window,
+    Attention, BlockIterator, Bound, Consideration, Constraint, Constraints, RepeatedBound, Window,
 };
+pub use crate::event::{split_segment, EventSegment, Plan, PlannedEvent, Problem};
 use crate::event::{Connection, Event, EventId, PlanningPhase};
-pub use crate::event::{EventSegment, Plan, PlannedEvent, Problem, split_segment};
 pub use crate::worker::{Capability, WorkerUtilization};
 use crate::worker::{Worker, WorkerId};
 
@@ -168,7 +168,7 @@ impl PlanBlueprint {
             let event_id = match self.events_seen.get(&connection.0) {
                 Some(event_id) => *event_id,
                 None => {
-                    return Err(anyhow!("{:?} not found", connection.0));
+                    return Err(anyhow!("Link connection {:?} not found", connection.0));
                 }
             };
             dependencies.push(Connection(event_id));
