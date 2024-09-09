@@ -83,14 +83,16 @@ impl EventBlueprint {
         self
     }
 
-    pub fn child(mut self, child: EventBlueprint) -> AnyResult<Self> {
+    pub fn child(mut self, mut child: EventBlueprint) -> AnyResult<Self> {
         if self.duration < child.duration {
             return Err(anyhow!("Child duration is longer than parent"));
         }
         if let Some(start) = self.start {
             if let Some(child_start) = child.start {
                 if child_start < start {
-                    return Err(anyhow!("Child starts before parent"));
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!("Child {:?} starts before parent {:?}", child.id, self.id);
+                    child.start = Some(start);
                 }
             }
         }
