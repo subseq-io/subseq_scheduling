@@ -288,11 +288,15 @@ impl Event {
             .map(|segment| segment.to_window())
             .collect()
     }
-
 }
 
 /// Creates two child events from this event, splitting the duration.
-pub fn split_segment(segments: &mut Vec<EventSegment>, segment: isize, point: f64, duration: f64) -> bool {
+pub fn split_segment(
+    segments: &mut Vec<EventSegment>,
+    segment: isize,
+    point: f64,
+    duration: f64,
+) -> bool {
     assert!(duration > 0.0);
     let segment: usize = if segment < 0 {
         segments.len().saturating_sub(segment.abs() as usize)
@@ -325,7 +329,6 @@ pub fn split_segment(segments: &mut Vec<EventSegment>, segment: isize, point: f6
         false
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -399,8 +402,15 @@ impl PlanningPhase {
             };
             let mut work_plans = vec![];
             let mut event = (&self.events[next_event.event_id.0]).clone();
-
-            let mut start_time = event.start();
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                "Processing {:?} with priority {}, start time {}, duration {}",
+                event.id,
+                event.priority,
+                event.start(),
+                event.duration()
+            );
+            let mut start_time = event.start().min(0.0);
             for dep in event.dependencies(&self.events) {
                 let dep_event = &self.events[dep.0];
                 let end = dep_event.total_window().end;
@@ -419,13 +429,23 @@ impl PlanningPhase {
             event.constraints = event.constraints.add_hard_bound(Bound::Lower(start_time));
             event.set_start(start_time);
 
-            for worker_id in worker_ids.iter() {
+            if let Some(worker_id) = event.assigned_worker {
+                // If the event has already been assigned to the worker we assume the worker
+                // can still do the job. And schedule it only for that worker.
                 let worker = &self.workers[worker_id.0];
-                if worker.can_do(&event.requirements) {
-                    // We clone the event so the worker can mutate it into a plan
-                    let work_plan = worker.expected_job_duration(event.clone(), &self.events);
-                    if let Some(work_plan) = work_plan {
-                        work_plans.push(work_plan);
+                let work_plan = worker.expected_job_duration(event.clone(), &self.events);
+                if let Some(work_plan) = work_plan {
+                    work_plans.push(work_plan);
+                }
+            } else {
+                for worker_id in worker_ids.iter() {
+                    let worker = &self.workers[worker_id.0];
+                    if worker.can_do(&event.requirements) {
+                        // We clone the event so the worker can mutate it into a plan
+                        let work_plan = worker.expected_job_duration(event.clone(), &self.events);
+                        if let Some(work_plan) = work_plan {
+                            work_plans.push(work_plan);
+                        }
                     }
                 }
             }
@@ -433,6 +453,13 @@ impl PlanningPhase {
             work_plans.shuffle(&mut self.rand);
             let mut lowest_cost: Option<EventMarker> = None;
             for work_plan in work_plans {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    "{:?} has a plan with cost {} (plan: {:?})",
+                    work_plan.worker_id(),
+                    work_plan.cost(),
+                    work_plan.windows()
+                );
                 if let Some(plan) = &lowest_cost {
                     if work_plan.cost() < plan.cost() {
                         lowest_cost = Some(work_plan);
@@ -444,6 +471,13 @@ impl PlanningPhase {
 
             if let Some(lowest_cost) = lowest_cost {
                 let event = self.events.get_mut(next_event.event_id.0).unwrap();
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    "Assigning {:?} to worker {:?} with cost {}",
+                    next_event.event_id,
+                    lowest_cost.worker_id(),
+                    lowest_cost.cost()
+                );
                 event.assigned_worker = Some(lowest_cost.worker_id());
                 event.from_windows(lowest_cost.windows());
                 let worker = self.workers.get_mut(lowest_cost.worker_id().0).unwrap();
