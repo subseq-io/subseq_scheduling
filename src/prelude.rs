@@ -167,13 +167,19 @@ impl PlanBlueprint {
 
         let mut dependencies = vec![];
         for connection in plan.dependencies {
-            let event_id = match self.events_seen.get(&connection.0) {
-                Some(event_id) => *event_id,
-                None => {
-                    return Err(anyhow!("Link connection {:?} not found", connection.0));
+            match self.events_seen.get(&connection.0) {
+                Some(event_id) => {
+                    dependencies.push(Connection(*event_id));
                 }
-            };
-            dependencies.push(Connection(event_id));
+                None => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!(
+                        "Link connection {:?} -> {:?} not found",
+                        plan.id,
+                        connection.0
+                    );
+                }
+            }
         }
 
         let event = Event::new(
