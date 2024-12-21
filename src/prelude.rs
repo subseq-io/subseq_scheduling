@@ -133,6 +133,12 @@ impl PlanBlueprint {
 
     pub fn event(mut self, plan: EventBlueprint) -> AnyResult<Self> {
         let id = EventId(self.events.len());
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            "New event {:?} has {:?} dependencies",
+            plan.id,
+            plan.dependencies
+        );
 
         let assigned_worker = if let Some(assigned_worker) = &plan.assigned_worker {
             let mut worker_id = None;
