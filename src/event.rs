@@ -297,7 +297,11 @@ pub fn split_segment(
     point: f64,
     duration: f64,
 ) -> bool {
-    assert!(duration > 0.0);
+    if duration <= 0.0 {
+        #[cfg(feature = "tracing")]
+        tracing::warn!("Duration must be greater than zero");
+        return false;
+    }
     let segment: usize = if segment < 0 {
         segments.len().saturating_sub(segment.abs() as usize)
     } else {
