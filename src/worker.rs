@@ -7,7 +7,7 @@ use crate::bounds::{Bound, Consideration, Constraints, Violation, Window, DEFAUL
 use crate::event::{split_segment, Event};
 use crate::prelude::Attention;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Capability(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
