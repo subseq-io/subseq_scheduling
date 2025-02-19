@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::bounds::{Bound, Consideration, Constraints, Violation, Window, DEFAULT_ATTENTION};
-use crate::event::{split_segment, Event};
+use crate::event::{split_segment, Event, EventId};
 use crate::prelude::Attention;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -47,8 +47,16 @@ impl EventMarker {
         (cost, violations)
     }
 
+    pub fn id(&self) -> EventId {
+        self.event.id()
+    }
+
     pub fn cost(&self) -> f64 {
         self.cost
+    }
+
+    pub fn end(&self) -> f64 {
+        self.event.end()
     }
 
     pub fn worker_id(&self) -> WorkerId {
@@ -123,6 +131,13 @@ impl Worker {
     /// Add a job for the worker as taken from a job plan produced by expected_job_duration
     pub fn add_job(&mut self, event: EventMarker) {
         assert!(event.worker_id == self.id);
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            "Assigning {:?} to worker {:?} with cost {}",
+            event.id(),
+            event.worker_id(),
+            event.cost()
+        );
 
         if let Some(interrupted_work) = event.interrupting {
             let job = self.jobs.get_mut(interrupted_work).unwrap();

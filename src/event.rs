@@ -198,6 +198,12 @@ impl Event {
         self.id
     }
 
+    pub fn end(&self) -> f64 {
+        self.segments
+            .last()
+            .map_or(0.0, |segment| segment.start + segment.duration)
+    }
+
     pub fn parent_id(&self) -> Option<EventId> {
         self.parent
     }
@@ -347,6 +353,9 @@ pub struct PlanningPhase {
     event_queue: EventQueue,
     rand: StdRng,
 
+    stop_at: Option<f64>,
+    stop_exclude: HashSet<EventId>,
+
     problems: Vec<Problem>,
     workers: Vec<Worker>,
     worker_map: HashMap<WorkerId, Uuid>,
@@ -356,12 +365,18 @@ impl From<PlanBlueprint> for PlanningPhase {
     fn from(blueprint: PlanBlueprint) -> Self {
         let events = blueprint.events;
         let queue = EventQueue::from_events(&events);
+        let event_map_reverse: HashMap<Uuid, EventId> = blueprint.event_map.iter().map(|(id, uuid)| (*uuid, *id)).collect();
+        let stop_exclude = blueprint.stop_exclude.into_iter().map(|id| 
+            event_map_reverse[&id]
+        ).collect();
 
         PlanningPhase {
             events,
             event_map: blueprint.event_map,
             event_queue: queue,
             rand: StdRng::from_seed(blueprint.seed),
+            stop_at: blueprint.stop_at,
+            stop_exclude,
             problems: Vec::new(),
             workers: blueprint.workers,
             worker_map: blueprint.worker_map,
@@ -389,6 +404,8 @@ impl PlanningPhase {
             events,
             event_map,
             event_queue: queue,
+            stop_at: None,
+            stop_exclude: HashSet::new(),
             rand: StdRng::from_seed(seed),
             problems: Vec::new(),
             workers,
@@ -475,13 +492,6 @@ impl PlanningPhase {
 
             if let Some(lowest_cost) = lowest_cost {
                 let event = self.events.get_mut(next_event.event_id.0).unwrap();
-                #[cfg(feature = "tracing")]
-                tracing::debug!(
-                    "Assigning {:?} to worker {:?} with cost {}",
-                    next_event.event_id,
-                    lowest_cost.worker_id(),
-                    lowest_cost.cost()
-                );
                 event.assigned_worker = Some(lowest_cost.worker_id());
                 event.from_windows(lowest_cost.windows());
                 let worker = self.workers.get_mut(lowest_cost.worker_id().0).unwrap();
@@ -495,7 +505,25 @@ impl PlanningPhase {
                         ),
                     });
                 }
-                worker.add_job(lowest_cost);
+
+                // If we have a stopping point, we only schedule events up to that point.
+                // If the event is part of the exclusion list, it is still scheduled.
+                if let Some(stop_at) = self.stop_at {
+                    if self.stop_exclude.contains(&lowest_cost.id())
+                        || lowest_cost.end() <= stop_at
+                    {
+                        worker.add_job(lowest_cost);
+                    } else {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(
+                            "Event {:?} is scheduled after stop time {} and is not part of the milestone",
+                            lowest_cost.id(),
+                            stop_at
+                        );
+                    }
+                } else {
+                    worker.add_job(lowest_cost);
+                }
             } else {
                 self.problems.push(Problem {
                     event_id: self.event_map[&event.id],

@@ -109,6 +109,10 @@ pub struct PlanBlueprint {
     pub(crate) events: Vec<Event>,
     pub(crate) event_map: HashMap<EventId, Uuid>,
     pub(crate) events_seen: HashMap<Uuid, EventId>,
+
+    pub(crate) stop_at: Option<f64>,
+    pub(crate) stop_exclude: Vec<Uuid>,
+
     pub(crate) seed: [u8; 32],
     pub(crate) workers: Vec<Worker>,
     pub(crate) worker_map: HashMap<WorkerId, Uuid>,
@@ -120,6 +124,8 @@ impl PlanBlueprint {
             events: Vec::new(),
             event_map: HashMap::new(),
             events_seen: HashMap::new(),
+            stop_at: None,
+            stop_exclude: Vec::new(),
             seed,
             workers: Vec::new(),
             worker_map: HashMap::new(),
@@ -129,6 +135,16 @@ impl PlanBlueprint {
     pub fn plan(self) -> Result<Plan, (Plan, Vec<Problem>)> {
         let planning = PlanningPhase::from(self);
         planning.plan()
+    }
+
+    pub fn stop_at(mut self, stop_at: f64) -> Self {
+        self.stop_at = Some(stop_at);
+        self
+    }
+
+    pub fn stop_exclude(mut self, stop_exclude: Vec<Uuid>) -> Self {
+        self.stop_exclude = stop_exclude;
+        self
     }
 
     pub fn event(mut self, plan: EventBlueprint) -> AnyResult<Self> {
