@@ -189,6 +189,7 @@ impl PlanBlueprint {
 
         let mut dependencies = vec![];
         for connection in plan.dependencies {
+            #[allow(clippy::single_match)]
             match self.events_seen.get(&connection.0) {
                 Some(event_id) => {
                     dependencies.push(Connection(*event_id));
