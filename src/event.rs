@@ -167,6 +167,7 @@ pub struct Event {
 }
 
 impl Event {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: EventId,
         start: f64,
@@ -278,7 +279,7 @@ impl Event {
         self.constraints.hard_bound_fn()(self.total_window())
     }
 
-    pub fn from_windows(&mut self, windows: Vec<Window>) {
+    pub fn update_from_windows(&mut self, windows: Vec<Window>) {
         self.segments = windows
             .into_iter()
             .map(|window| EventSegment {
@@ -309,7 +310,7 @@ pub fn split_segment(
         return false;
     }
     let segment: usize = if segment < 0 {
-        segments.len().saturating_sub(segment.abs() as usize)
+        segments.len().saturating_sub(segment.unsigned_abs())
     } else {
         segment as usize
     };
@@ -365,10 +366,16 @@ impl From<PlanBlueprint> for PlanningPhase {
     fn from(blueprint: PlanBlueprint) -> Self {
         let events = blueprint.events;
         let queue = EventQueue::from_events(&events);
-        let event_map_reverse: HashMap<Uuid, EventId> = blueprint.event_map.iter().map(|(id, uuid)| (*uuid, *id)).collect();
-        let stop_exclude = blueprint.stop_exclude.into_iter().map(|id| 
-            event_map_reverse[&id]
-        ).collect();
+        let event_map_reverse: HashMap<Uuid, EventId> = blueprint
+            .event_map
+            .iter()
+            .map(|(id, uuid)| (*uuid, *id))
+            .collect();
+        let stop_exclude = blueprint
+            .stop_exclude
+            .into_iter()
+            .map(|id| event_map_reverse[&id])
+            .collect();
 
         PlanningPhase {
             events,
@@ -416,13 +423,9 @@ impl PlanningPhase {
     fn create_plan(&mut self) {
         let worker_ids: Vec<_> = self.workers.iter().map(|worker| worker.id()).collect();
 
-        loop {
-            let next_event = match self.event_queue.pop() {
-                Some(queued_event) => queued_event,
-                None => break,
-            };
+        while let Some(next_event) = self.event_queue.pop() {
             let mut work_plans = vec![];
-            let mut event = (&self.events[next_event.event_id.0]).clone();
+            let mut event = (self.events[next_event.event_id.0]).clone();
             #[cfg(feature = "tracing")]
             tracing::debug!(
                 "Processing {:?} with priority {}, start time {}, duration {}",
@@ -493,7 +496,7 @@ impl PlanningPhase {
             if let Some(lowest_cost) = lowest_cost {
                 let event = self.events.get_mut(next_event.event_id.0).unwrap();
                 event.assigned_worker = Some(lowest_cost.worker_id());
-                event.from_windows(lowest_cost.windows());
+                event.update_from_windows(lowest_cost.windows());
                 let worker = self.workers.get_mut(lowest_cost.worker_id().0).unwrap();
                 let vio = lowest_cost.violations();
                 if !vio.is_empty() {
@@ -509,8 +512,7 @@ impl PlanningPhase {
                 // If we have a stopping point, we only schedule events up to that point.
                 // If the event is part of the exclusion list, it is still scheduled.
                 if let Some(stop_at) = self.stop_at {
-                    if self.stop_exclude.contains(&lowest_cost.id())
-                        || lowest_cost.end() <= stop_at
+                    if self.stop_exclude.contains(&lowest_cost.id()) || lowest_cost.end() <= stop_at
                     {
                         worker.add_job(lowest_cost);
                     } else {

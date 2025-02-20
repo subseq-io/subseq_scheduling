@@ -162,13 +162,12 @@ impl Worker {
         for (i, job) in self.jobs.iter().enumerate() {
             let job_priority = job.event.priority();
 
-            if event_priority < 0 && job_priority >= 0 {
-                if !event.depends_on(job.event.id(), events) {
-                    // Negative priority events are classified as interrupts and can be scheduled at
-                    // the same time as positive priority events.
-                    interrupted_work = Some(i);
-                    break;
-                }
+            if event_priority < 0 && job_priority >= 0 && !event.depends_on(job.event.id(), events)
+            {
+                // Negative priority events are classified as interrupts and can be scheduled at
+                // the same time as positive priority events.
+                interrupted_work = Some(i);
+                break;
             }
 
             if let Some(parent_id) = event.parent_id() {
@@ -279,9 +278,8 @@ impl Worker {
         let mut blocked_off_time: f64 = 0.0;
 
         for bound in self.blocked_off.hard_bounds() {
-            match bound {
-                Bound::Lower(lower) => start_time = lower,
-                _ => {}
+            if let Bound::Lower(lower) = bound {
+                start_time = lower
             }
         }
 

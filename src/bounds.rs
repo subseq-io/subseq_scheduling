@@ -56,7 +56,7 @@ pub enum Violation {
     Upper(f64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Window {
     pub start: f64, // Inclusive
@@ -68,6 +68,12 @@ impl std::hash::Hash for Window {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.start.to_bits().hash(state);
         self.end.to_bits().hash(state);
+    }
+}
+
+impl PartialOrd for Window {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -206,10 +212,7 @@ pub enum ViolatedConstriant {
 
 impl Constraint {
     pub fn is_hard(&self) -> bool {
-        match self {
-            Constraint::HardConstraint { .. } => true,
-            _ => false,
-        }
+        matches!(self, Constraint::HardConstraint { .. })
     }
 
     pub fn evaluate(self, range: Window) -> Option<ViolatedConstriant> {
@@ -218,13 +221,9 @@ impl Constraint {
                 let violation = bound.0.violated(range);
                 violation.map(ViolatedConstriant::Hard)
             }
-            Constraint::RepeatedBlock(repeated_bound) => {
-                if let Some(violated_range) = repeated_bound.violated(range) {
-                    Some(ViolatedConstriant::Block(violated_range))
-                } else {
-                    None
-                }
-            }
+            Constraint::RepeatedBlock(repeated_bound) => repeated_bound
+                .violated(range)
+                .map(ViolatedConstriant::Block),
             Constraint::Block(block_range) => {
                 if block_range.overlap(range) {
                     Some(ViolatedConstriant::Block(block_range))
@@ -267,7 +266,7 @@ struct RepeatedBoundState {
     last_range: Window,
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Consideration {
     pub window: Window,
     pub attention: Attention,
@@ -287,6 +286,12 @@ impl From<Window> for Consideration {
             window,
             attention: Attention::NO_MULTITASKING,
         }
+    }
+}
+
+impl PartialOrd for Consideration {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
