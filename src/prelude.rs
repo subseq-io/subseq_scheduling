@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use crate::bounds::{
-    Attention, BlockIterator, Bound, Consideration, Constraint, Constraints, RepeatedBound, Window,
+    Attention, BlockIterator, Bound, Consideration, Constraint, Constraints, RepeatedBound,
+    Violation, Window,
 };
-pub use crate::event::{split_segment, EventSegment, Plan, PlannedEvent, Problem};
+pub use crate::event::{split_segment, EventSegment, Explanation, Plan, PlannedEvent, Problem};
 use crate::event::{Connection, Event, EventId, PlanningPhase};
 pub use crate::worker::{Capability, WorkerUtilization};
 use crate::worker::{Worker, WorkerId};
@@ -124,8 +125,10 @@ impl PlanBlueprint {
             events: Vec::new(),
             event_map: HashMap::new(),
             events_seen: HashMap::new(),
+
             stop_at: None,
             stop_exclude: Vec::new(),
+
             seed,
             workers: Vec::new(),
             worker_map: HashMap::new(),

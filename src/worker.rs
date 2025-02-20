@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::bounds::{Bound, Consideration, Constraints, Violation, Window, DEFAULT_ATTENTION};
-use crate::event::{split_segment, Event, EventId};
+use crate::event::{split_segment, Event, EventId, Explanation};
 use crate::prelude::Attention;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -17,7 +17,7 @@ pub struct WorkerId(pub(crate) usize);
 pub struct EventMarker {
     worker_id: WorkerId,
     event: Event,
-    interrupting: Option<usize>,
+    interrupting: Option<EventId>,
     violations: Vec<Violation>,
     cost: f64,
 }
@@ -28,6 +28,18 @@ pub const DURATION_COST_ADJUSTMENT: f64 = 10.0;
 pub const EVENT_VIOLATION_COST: f64 = 100.0; // Arbitrary
 pub const INTERRUPT_COST: f64 = 10.0; // Arbitrary
 pub const ATTENTION_COST_ADJUSTMENT: f64 = 0.1;
+
+lazy_static::lazy_static! {
+    pub static ref COSTS: HashMap<String, f64> = {
+        let mut m = HashMap::new();
+        m.insert("start".to_string(), START_COST_ADJUSTMENT);
+        m.insert("duration".to_string(), DURATION_COST_ADJUSTMENT);
+        m.insert("violation".to_string(), EVENT_VIOLATION_COST);
+        m.insert("interrupt".to_string(), INTERRUPT_COST);
+        m.insert("attention".to_string(), ATTENTION_COST_ADJUSTMENT);
+        m
+    };
+}
 
 impl EventMarker {
     pub fn calc_cost(
@@ -49,6 +61,27 @@ impl EventMarker {
 
     pub fn id(&self) -> EventId {
         self.event.id()
+    }
+
+    pub fn explain(
+        &self,
+        worker_lookup: &HashMap<WorkerId, Uuid>,
+        event_lookup: &HashMap<EventId, Uuid>,
+    ) -> Explanation {
+        Explanation {
+            event_id: event_lookup.get(&self.event.id()).unwrap().clone(),
+            worker_id: *worker_lookup.get(&self.worker_id).unwrap(),
+            interrupting: self
+                .interrupting
+                .iter()
+                .map(|i| *event_lookup.get(&i).unwrap())
+                .collect(),
+            violations: self.violations.clone(),
+            cost: self.cost,
+            start_time: self.event.start(),
+            end_time: self.event.end(),
+            duration: self.event.adjusted_duration(),
+        }
     }
 
     pub fn cost(&self) -> f64 {
@@ -74,7 +107,7 @@ impl EventMarker {
     pub fn new(
         worker_id: WorkerId,
         event: Event,
-        interrupting: Option<usize>,
+        interrupting: Option<EventId>,
         total_attention: u32,
     ) -> Self {
         let (cost, violations) = Self::calc_cost(&event, interrupting.is_some(), total_attention);
@@ -140,7 +173,7 @@ impl Worker {
         );
 
         if let Some(interrupted_work) = event.interrupting {
-            let job = self.jobs.get_mut(interrupted_work).unwrap();
+            let job = self.jobs.get_mut(interrupted_work.0).unwrap();
             job.event.interrupt(&event.event);
         }
 
@@ -159,14 +192,14 @@ impl Worker {
 
         // Considerations are the windows of all the jobs that are currently being worked on.
         let mut considerations = vec![];
-        for (i, job) in self.jobs.iter().enumerate() {
+        for job in self.jobs.iter() {
             let job_priority = job.event.priority();
 
             if event_priority < 0 && job_priority >= 0 {
                 if !event.depends_on(job.event.id(), events) {
                     // Negative priority events are classified as interrupts and can be scheduled at
                     // the same time as positive priority events.
-                    interrupted_work = Some(i);
+                    interrupted_work = Some(event.id());
                     break;
                 }
             }

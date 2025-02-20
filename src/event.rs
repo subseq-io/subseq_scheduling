@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::bounds::{Attention, Bound, Constraints, Violation, Window};
 use crate::prelude::PlanBlueprint;
-use crate::worker::{Capability, EventMarker, Worker, WorkerId, WorkerUtilization};
+use crate::worker::{Capability, EventMarker, Worker, WorkerId, WorkerUtilization, COSTS};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub struct EventId(pub(crate) usize);
@@ -347,10 +347,24 @@ pub struct Problem {
     pub problem: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Explanation {
+    pub event_id: Uuid,
+    pub worker_id: Uuid,
+    pub interrupting: Vec<Uuid>,
+    pub violations: Vec<Violation>,
+    pub cost: f64,
+    pub start_time: f64,
+    pub end_time: f64,
+    pub duration: f64,
+}
+
 pub struct PlanningPhase {
     events: Vec<Event>,
     event_map: HashMap<EventId, Uuid>,
     event_queue: EventQueue,
+    explanations: HashMap<EventId, Explanation>,
     rand: StdRng,
 
     stop_at: Option<f64>,
@@ -365,15 +379,22 @@ impl From<PlanBlueprint> for PlanningPhase {
     fn from(blueprint: PlanBlueprint) -> Self {
         let events = blueprint.events;
         let queue = EventQueue::from_events(&events);
-        let event_map_reverse: HashMap<Uuid, EventId> = blueprint.event_map.iter().map(|(id, uuid)| (*uuid, *id)).collect();
-        let stop_exclude = blueprint.stop_exclude.into_iter().map(|id| 
-            event_map_reverse[&id]
-        ).collect();
+        let event_map_reverse: HashMap<Uuid, EventId> = blueprint
+            .event_map
+            .iter()
+            .map(|(id, uuid)| (*uuid, *id))
+            .collect();
+        let stop_exclude = blueprint
+            .stop_exclude
+            .into_iter()
+            .map(|id| event_map_reverse[&id])
+            .collect();
 
         PlanningPhase {
             events,
             event_map: blueprint.event_map,
             event_queue: queue,
+            explanations: HashMap::new(),
             rand: StdRng::from_seed(blueprint.seed),
             stop_at: blueprint.stop_at,
             stop_exclude,
@@ -404,6 +425,7 @@ impl PlanningPhase {
             events,
             event_map,
             event_queue: queue,
+            explanations: HashMap::new(),
             stop_at: None,
             stop_exclude: HashSet::new(),
             rand: StdRng::from_seed(seed),
@@ -509,9 +531,12 @@ impl PlanningPhase {
                 // If we have a stopping point, we only schedule events up to that point.
                 // If the event is part of the exclusion list, it is still scheduled.
                 if let Some(stop_at) = self.stop_at {
-                    if self.stop_exclude.contains(&lowest_cost.id())
-                        || lowest_cost.end() <= stop_at
+                    if self.stop_exclude.contains(&lowest_cost.id()) || lowest_cost.end() <= stop_at
                     {
+                        self.explanations.insert(
+                            lowest_cost.id(),
+                            lowest_cost.explain(&self.worker_map, &self.event_map),
+                        );
                         worker.add_job(lowest_cost);
                     } else {
                         #[cfg(feature = "tracing")]
@@ -522,6 +547,10 @@ impl PlanningPhase {
                         );
                     }
                 } else {
+                    self.explanations.insert(
+                        lowest_cost.id(),
+                        lowest_cost.explain(&self.worker_map, &self.event_map),
+                    );
                     worker.add_job(lowest_cost);
                 }
             } else {
@@ -555,12 +584,24 @@ impl PlanningPhase {
         if self.problems.is_empty() {
             Ok(Plan {
                 events: planned_events,
+                explanations: self
+                    .explanations
+                    .into_iter()
+                    .map(|(k, v)| (self.event_map[&k], v))
+                    .collect(),
+                costs: COSTS.clone(),
                 utilization,
             })
         } else {
             Err((
                 Plan {
                     events: planned_events,
+                    explanations: self
+                        .explanations
+                        .into_iter()
+                        .map(|(k, v)| (self.event_map[&k], v))
+                        .collect(),
+                    costs: COSTS.clone(),
                     utilization,
                 },
                 self.problems,
@@ -593,6 +634,8 @@ impl PlannedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
     pub events: Vec<PlannedEvent>,
+    pub explanations: HashMap<Uuid, Explanation>,
+    pub costs: HashMap<String, f64>,
     pub utilization: Vec<WorkerUtilization>,
 }
 
