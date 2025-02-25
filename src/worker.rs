@@ -530,6 +530,7 @@ mod tests {
                     start: 6.0,
                     end: 8.0,
                 },
+                Vec::new(),
             ))
             .add_hard_bound(Bound::Upper(32.0));
 

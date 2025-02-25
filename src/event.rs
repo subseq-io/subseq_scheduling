@@ -852,6 +852,7 @@ mod tests {
                     start: 6.0,
                     end: 8.0,
                 },
+                Vec::new(),
             )),
             capabilites0,
         );
@@ -863,6 +864,7 @@ mod tests {
                     start: 6.0,
                     end: 8.0,
                 },
+                Vec::new(),
             )),
             capabilites01,
         );
@@ -953,6 +955,7 @@ mod tests {
                     start: 6.0,
                     end: 8.0,
                 },
+                Vec::new(),
             )),
             capabilites0,
         );
@@ -964,6 +967,7 @@ mod tests {
                     start: 6.0,
                     end: 8.0,
                 },
+                Vec::new(),
             )),
             capabilites01,
         );
