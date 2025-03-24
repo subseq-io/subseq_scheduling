@@ -157,8 +157,19 @@ impl Worker {
     }
 
     /// A worker can handle requirements that is in their capabilities
-    pub fn can_do(&self, requirements: &HashSet<Capability>) -> bool {
-        self.capabilities.is_superset(requirements)
+    pub fn can_do(&self, event: &Event) -> bool {
+        let requirements = event.requirements();
+        let result = self.capabilities.is_superset(requirements);
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            "Worker({:?}) has capabilities {:?} and {:?} has requirements {:?}: {}",
+            self.id,
+            self.capabilities,
+            event.id(),
+            requirements,
+            result
+        );
+        result
     }
 
     /// Add a job for the worker as taken from a job plan produced by expected_job_duration

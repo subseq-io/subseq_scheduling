@@ -278,6 +278,10 @@ impl Event {
         self.constraints.hard_bound_fn()(self.total_window())
     }
 
+    pub fn requirements(&self) -> &HashSet<Capability> {
+        &self.requirements
+    }
+
     pub fn from_windows(&mut self, windows: Vec<Window>) {
         self.segments = windows
             .into_iter()
@@ -483,7 +487,7 @@ impl PlanningPhase {
             } else {
                 for worker_id in worker_ids.iter() {
                     let worker = &self.workers[worker_id.0];
-                    if worker.can_do(&event.requirements) {
+                    if worker.can_do(&event) {
                         // We clone the event so the worker can mutate it into a plan
                         let work_plan = worker.expected_job_duration(event.clone(), &self.events);
                         if let Some(work_plan) = work_plan {
