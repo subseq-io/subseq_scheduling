@@ -152,25 +152,16 @@ impl Bound {
 
 /// Repeated bound, block off this range ever nth repeat.
 /// This is used for representing repeated constraints such as weekends.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepeatedBound {
     n: usize,
     bound: Window,
-    shifts: Vec<(isize, f64)>,
-}
-
-impl PartialOrd for RepeatedBound {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.bound.partial_cmp(&other.bound)
-    }
 }
 
 impl RepeatedBound {
-    pub fn new(n: usize, bound: Window, mut shifts: Vec<(isize, f64)>) -> Self {
-        // Shifts must always be sorted in ascending order
-        shifts.sort_by_key(|(k, _)| *k);
-        RepeatedBound { n, bound, shifts }
+    pub fn new(n: usize, bound: Window) -> Self {
+        RepeatedBound { n, bound }
     }
 
     pub fn violated(&self, range: Window) -> Option<Window> {
@@ -189,16 +180,7 @@ impl RepeatedBound {
     pub fn range(&self, offset: isize, time: f64) -> Window {
         let segment_offset = time as isize / self.n as isize + offset;
         let segment_value = self.n as f64 * segment_offset as f64;
-
-        let bound = self.bound.add_offset(segment_value);
-        let mut shift = 0.0;
-        for (shift_position, shift_amount) in &self.shifts {
-            if *shift_position > bound.start as isize {
-                break;
-            }
-            shift = *shift_amount;
-        }
-        bound.add_offset(shift)
+        self.bound.add_offset(segment_value)
     }
 }
 
@@ -206,7 +188,7 @@ impl RepeatedBound {
 #[serde(rename_all = "camelCase")]
 pub struct HardConstraint(Bound);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Constraint {
     /// A hard constraint is a constraint that must be satisfied for the solution
@@ -337,7 +319,7 @@ impl BlockIterator {
 
                     repeated_blocks.push(RepeatedBoundState {
                         offset: 0,
-                        bound: repeated_bound.clone(),
+                        bound: *repeated_bound,
                         last_range: next_range,
                     });
                 }
@@ -408,8 +390,8 @@ impl Constraints {
 
     pub fn add_hard_bound(self, bound: Bound) -> Self {
         match bound {
-            Bound::Lower(value) => self.lower_bound(value),
-            Bound::Upper(value) => self.upper_bound(value),
+            Bound::Lower(value) => self.lower_bound(value, Ordering::Greater),
+            Bound::Upper(value) => self.upper_bound(value, Ordering::Less),
         }
     }
 
@@ -417,19 +399,45 @@ impl Constraints {
         self.0.iter()
     }
 
-    fn lower_bound(mut self, lower_bound: f64) -> Self {
-        self.0
-            .push(Constraint::HardConstraint(HardConstraint(Bound::Lower(
-                lower_bound,
-            ))));
+    fn lower_bound(mut self, lower_bound: f64, ord: Ordering) -> Self {
+        let mut modified = false;
+        for constraint in self.0.iter_mut() {
+            if let Constraint::HardConstraint(HardConstraint(Bound::Lower(value))) = constraint {
+                if (*value).partial_cmp(&lower_bound) == Some(ord) {
+                    *value = lower_bound;
+                }
+                // We mark modified as true even if the value is the same, because we want to
+                // there is only ever one lower bound.
+                modified = true;
+                break;
+            }
+        }
+        if !modified {
+            self.0
+                .push(Constraint::HardConstraint(HardConstraint(Bound::Lower(
+                    lower_bound,
+                ))));
+        }
         self
     }
 
-    fn upper_bound(mut self, upper_bound: f64) -> Self {
-        self.0
-            .push(Constraint::HardConstraint(HardConstraint(Bound::Upper(
-                upper_bound,
-            ))));
+    fn upper_bound(mut self, upper_bound: f64, ord: Ordering) -> Self {
+        let mut modified = false;
+        for constraint in self.0.iter_mut() {
+            if let Constraint::HardConstraint(HardConstraint(Bound::Upper(value))) = constraint {
+                if (*value).partial_cmp(&upper_bound) == Some(ord) {
+                    *value += upper_bound;
+                }
+                modified = true;
+                break;
+            }
+        }
+        if !modified {
+            self.0
+                .push(Constraint::HardConstraint(HardConstraint(Bound::Upper(
+                    upper_bound,
+                ))));
+        }
         self
     }
 
@@ -448,12 +456,11 @@ impl Constraints {
             .iter()
             .filter_map(|constraint| {
                 if let Constraint::HardConstraint(HardConstraint(bound)) = constraint {
-                    Some(bound)
+                    Some(*bound)
                 } else {
                     None
                 }
             })
-            .cloned()
             .collect()
     }
 
@@ -600,7 +607,6 @@ mod tests {
                 start: 6.0,
                 end: 8.0,
             },
-            shifts: Vec::new(),
         };
         let range = Window {
             start: 15.0,
@@ -617,7 +623,6 @@ mod tests {
                 start: 6.0,
                 end: 8.0,
             },
-            shifts: Vec::new(),
         };
         let range = Window {
             start: 7.0,
@@ -634,7 +639,6 @@ mod tests {
                 start: 6.0,
                 end: 8.0,
             },
-            shifts: Vec::new(),
         };
         let offset_range = rb.range(1, 13.0);
         assert_eq!(
@@ -744,7 +748,6 @@ mod tests {
                     start: 6.0,
                     end: 8.0,
                 },
-                shifts: Vec::new(),
             }),
             Constraint::Block(Window {
                 start: 0.0,
@@ -822,74 +825,6 @@ mod tests {
                 }
                 .into()
             )
-        );
-    }
-
-    #[test]
-    fn test_repeated_bound_shift() {
-        let shifts = vec![(21, 1.0), (46, 0.0), (73, 1.0)].into_iter().collect();
-        let bound = RepeatedBound {
-            n: 7,
-            bound: Window {
-                start: 6.0,
-                end: 8.0,
-            },
-            shifts,
-        };
-        let no_shift = bound.range(1, 0.0);
-        assert_eq!(
-            no_shift,
-            Window {
-                start: 13.0, // 7 + 6 + 0
-                end: 15.0,   // 7 + 8 + 0
-            }
-        );
-
-        let shift = bound.range(0, 21.0);
-        assert_eq!(
-            shift,
-            Window {
-                start: 28.0, // 21 + 6 + 1
-                end: 30.0,   // 21 + 8 + 1
-            }
-        );
-
-        let shift_between = bound.range(0, 31.0);
-        assert_eq!(
-            shift_between,
-            Window {
-                start: 35.0, // 28 + 6 + 1
-                end: 37.0,   // 28 + 8 + 1
-            }
-        );
-
-        let shift_middle = bound.range(0, 49.0);
-        assert_eq!(
-            shift_middle,
-            Window {
-                start: 55.0, // 49 + 6 + 0
-                end: 57.0,   // 49 + 8 + 0
-            }
-        );
-
-        let shift_before_end = bound.range(0, 70.0);
-        // We expect this to be shifted because even though it starts before the shift the window
-        // is after it.
-        assert_eq!(
-            shift_before_end,
-            Window {
-                start: 77.0, // 70 + 6 + 1
-                end: 79.0,   // 70 + 8 + 1
-            }
-        );
-
-        let shift_end = bound.range(0, 77.0);
-        assert_eq!(
-            shift_end,
-            Window {
-                start: 84.0, // 77 + 6 + 1
-                end: 86.0,   // 77 + 8 + 1
-            }
         );
     }
 }
