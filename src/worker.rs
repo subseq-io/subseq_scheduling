@@ -351,6 +351,9 @@ impl Worker {
         }
         let total_time = end_time - start_time - blocked_off_time;
 
+        if total_time == 0.0 {
+            return 0.0;
+        }
         working_time / total_time
     }
 }
