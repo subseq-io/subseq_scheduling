@@ -127,17 +127,28 @@ pub struct Worker {
     blocked_off: Constraints,
     jobs: Vec<EventMarker>,
     capabilities: HashSet<Capability>,
+    default: bool,
 }
 
 impl Worker {
     /// Constructor
-    pub fn new(id: WorkerId, blocked_off: Constraints, capabilities: HashSet<Capability>) -> Self {
+    pub fn new(
+        id: WorkerId,
+        blocked_off: Constraints,
+        capabilities: HashSet<Capability>,
+        default: bool,
+    ) -> Self {
         Self {
             id,
             blocked_off,
             jobs: Vec::new(),
             capabilities,
+            default,
         }
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.default
     }
 
     /// Retireves the worker's indexed ID
@@ -158,6 +169,9 @@ impl Worker {
 
     /// A worker can handle requirements that is in their capabilities
     pub fn can_do(&self, event: &Event) -> bool {
+        if self.default {
+            return false;
+        }
         let requirements = event.requirements();
         let result = self.capabilities.is_superset(requirements);
         #[cfg(feature = "tracing")]
@@ -297,7 +311,8 @@ impl Worker {
 
         let range = event.total_window();
         for bound in self.blocked_off.hard_bounds() {
-            if bound.violated(range).is_some() {
+            // Default workers will always be available for jobs, even if they are blocked off.
+            if bound.violated(range).is_some() && !self.default {
                 return None;
             }
         }
@@ -389,7 +404,7 @@ mod tests {
                 start: 20.0,
                 end: 22.0,
             });
-        let mut worker = Worker::new(WorkerId(0), constraints, HashSet::new());
+        let mut worker = Worker::new(WorkerId(0), constraints, HashSet::new(), false);
         let event = Event::new(
             EventId(0),
             0.0,
@@ -438,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_worker_expected_job_duration_base() {
-        let mut worker = Worker::new(WorkerId(0), Constraints::new(), HashSet::new());
+        let mut worker = Worker::new(WorkerId(0), Constraints::new(), HashSet::new(), false);
 
         let event = Event::new(
             EventId(0),
@@ -503,7 +518,7 @@ mod tests {
         let constraints = Constraints::new()
             .add_hard_bound(Bound::Lower(5.0))
             .add_hard_bound(Bound::Upper(15.0));
-        let worker = Worker::new(WorkerId(0), constraints, HashSet::new());
+        let worker = Worker::new(WorkerId(0), constraints, HashSet::new(), false);
         let event = Event::new(
             EventId(0),
             0.0,
@@ -547,7 +562,7 @@ mod tests {
             ))
             .add_hard_bound(Bound::Upper(32.0));
 
-        let mut worker = Worker::new(WorkerId(0), constraints, HashSet::new());
+        let mut worker = Worker::new(WorkerId(0), constraints, HashSet::new(), false);
         let event = Event::new(
             EventId(0),
             0.0,

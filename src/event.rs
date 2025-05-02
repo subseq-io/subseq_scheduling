@@ -476,6 +476,8 @@ impl PlanningPhase {
             event.constraints = event.constraints.add_hard_bound(Bound::Lower(start_time));
             event.set_start(start_time);
 
+            let mut default_worker: Option<WorkerId> = None;
+
             if let Some(worker_id) = event.assigned_worker {
                 // If the event has already been assigned to the worker we assume the worker
                 // can still do the job. And schedule it only for that worker.
@@ -493,6 +495,10 @@ impl PlanningPhase {
                         if let Some(work_plan) = work_plan {
                             work_plans.push(work_plan);
                         }
+                    } else if worker.is_default() {
+                        // If the worker is default, we assume they can do the job.
+                        // We will assign them to the job if no other worker is available.
+                        default_worker = Some(*worker_id);
                     }
                 }
             }
@@ -562,6 +568,15 @@ impl PlanningPhase {
                     event_id: self.event_map[&event.id],
                     problem: "No worker available".to_string(),
                 });
+                if let Some(worker_id) = default_worker {
+                    // If no worker is available, we still need to schedule the event.
+                    // We will assign it to the default worker.
+                    let worker = self.workers.get_mut(worker_id.0).unwrap();
+                    let work_plan = worker.expected_job_duration(event.clone(), &self.events);
+                    if let Some(work_plan) = work_plan {
+                        worker.add_job(work_plan);
+                    }
+                }
             }
         }
     }
@@ -858,6 +873,7 @@ mod tests {
                 },
             )),
             capabilites0,
+            false,
         );
         let worker1 = Worker::new(
             WorkerId(1),
@@ -869,6 +885,7 @@ mod tests {
                 },
             )),
             capabilites01,
+            false,
         );
 
         let phase = PlanningPhase::new(
@@ -959,6 +976,7 @@ mod tests {
                 },
             )),
             capabilites0,
+            false,
         );
         let worker1 = Worker::new(
             WorkerId(1),
@@ -970,6 +988,7 @@ mod tests {
                 },
             )),
             capabilites01,
+            false,
         );
 
         let phase = PlanningPhase::new(events, vec![worker0, worker1], [0; 32]);

@@ -225,6 +225,14 @@ impl PlanBlueprint {
         Ok(self)
     }
 
+    pub fn default_worker(mut self, worker_id: Uuid) -> Self {
+        let id = WorkerId(self.workers.len());
+        let worker = Worker::new(id, Constraints::default(), HashSet::new(), true);
+        self.worker_map.insert(id, worker_id);
+        self.workers.push(worker);
+        self
+    }
+
     pub fn worker(
         mut self,
         worker_id: Uuid,
@@ -232,7 +240,7 @@ impl PlanBlueprint {
         capabilities: HashSet<Capability>,
     ) -> Self {
         let id = WorkerId(self.workers.len());
-        let worker = Worker::new(id, blocked_off, capabilities);
+        let worker = Worker::new(id, blocked_off, capabilities, false);
         self.worker_map.insert(id, worker_id);
         self.workers.push(worker);
         self
